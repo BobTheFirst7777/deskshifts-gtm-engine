@@ -14,35 +14,45 @@ export default async function AgentRules({ params }: { params: Promise<{ key: st
       </p>
       <p className="mt-2">Ideal customers: {s.icp}</p>
 
-      <H2>Every day</H2>
+      <H2>Every evening (8pm)</H2>
       <ol className="list-decimal space-y-1 pl-6">
         <li>
-          Open <Link className="text-blue-700 underline" href={`${base}/today`}>Today</Link>. Work the tasks top to bottom.
-          Before writing, open the lead&apos;s history from the task. Send the draft (improve it if you know something more
-          specific), then press <b>Sent</b> with the exact text you sent.
+          <b>Find leads.</b> Follow this brief: <i>{s.sourcingBrief}</i> Aim for {s.nightlyLeadTarget} new people. Add each on{" "}
+          <Link className="text-blue-700 underline" href={`${base}/add`}>Add leads</Link>. Duplicates merge automatically, so adding someone twice is safe.
         </li>
         <li>
-          Check LinkedIn messages and email for replies. Log every reply on{" "}
-          <Link className="text-blue-700 underline" href={`${base}/log`}>Log replies &amp; updates</Link>. A reply stops
-          automatic follow-ups and alerts the team.
-        </li>
-        <li>
-          When you find good prospects (LinkedIn, events on Luma, news, Apollo), add them on{" "}
-          <Link className="text-blue-700 underline" href={`${base}/add`}>Add leads</Link>. Duplicates are merged
-          automatically, so adding someone twice is safe.
-        </li>
-        <li>
-          At the end of the day, read the <Link className="text-blue-700 underline" href={`${base}/summary`}>Daily summary</Link> and
-          text it to the team.
+          <b>Research them.</b> Open <Link className="text-blue-700 underline" href={`${base}/research`}>Research</Link> and fill in every new
+          lead: how they relate to us, why now, what to pitch, importance, channel, and the drafts. They then wait for the team&apos;s approval.
         </li>
       </ol>
 
+      <H2>Every day</H2>
+      <ol className="list-decimal space-y-1 pl-6">
+        <li>
+          <b>Send what&apos;s approved.</b> Open <Link className="text-blue-700 underline" href={`${base}/today`}>Send</Link>. For LinkedIn
+          connection requests, send the request with the note and press <b>Request sent</b>. For messages and emails, send them and press <b>Sent</b>.
+        </li>
+        <li>
+          <b>Check LinkedIn and email.</b> On <Link className="text-blue-700 underline" href={`${base}/log`}>Log</Link>, record every accepted
+          connection and every reply. Accepted connections put the first message up for approval; replies stop follow-ups and alert the team.
+        </li>
+        <li>
+          <b>Text the team</b> the <Link className="text-blue-700 underline" href={`${base}/summary`}>Daily summary</Link>.
+        </li>
+      </ol>
+
+      <H2>Every Monday</H2>
+      <p>
+        Read the batch results and write recommendations on the Log page: what worked, what didn&apos;t, and what to change in who we target,
+        channels and wording. Apply the latest recommendations whenever you write new drafts.
+      </p>
+
       <H2>Rules</H2>
       <ul className="list-disc space-y-1 pl-6">
-        <li>Only message people listed on your Today page. Never message a lead marked hands-off; the team handles those personally.</li>
+        <li>Only contact people listed on your Send page, and only with the approved text. Never message a lead marked hands-off; the team handles those personally.</li>
         <li>
           {s.instinctMode === "approve"
-            ? "Approve-first mode is on: your Today page only shows tasks a person has approved."
+            ? "Approve-first mode is on: your Send page only shows tasks a person has approved."
             : "Auto mode is on: you may send every task on your Today page."}
         </li>
         <li>LinkedIn pace: no more than {s.linkedinDailyLimit} connection requests or messages a day. Today stops showing LinkedIn tasks once you hit it.</li>

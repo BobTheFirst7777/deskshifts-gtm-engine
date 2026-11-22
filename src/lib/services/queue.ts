@@ -1,16 +1,112 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import type { Lead } from "@/lib/db/schema";
 import { record } from "./activity";
 import { getSettings } from "./settings";
-import { assigneeFor } from "./leads";
+import { assigneeFor, getLead } from "./leads";
 
 export type Drafter = (leadId: string, followUpNumber: number) => Promise<string | null>;
 
+/** Kinds that count as "we messaged them" (a connection request or acceptance doesn't). */
+export const MESSAGE_KINDS = ["message", "call", "meeting"] as const;
+
+async function hasPendingOutbound(leadId: string) {
+  const db = getDb();
+  const rows = await db
+    .select({ id: schema.actions.id })
+    .from(schema.actions)
+    .where(
+      and(
+        eq(schema.actions.leadId, leadId),
+        eq(schema.actions.status, "pending"),
+        inArray(schema.actions.type, ["send_first", "follow_up", "connect", "respond"]),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Put a lead's next first-outreach step up for review:
+ *  - LinkedIn, not connected yet → a connection request (with the note)
+ *  - LinkedIn, request pending → nothing (wait for them to accept)
+ *  - LinkedIn connected, or email → the first message
+ * Returns the task created, or null if nothing was needed.
+ */
+export async function queueFirstTouch(leadId: string, opts: { force?: boolean; now?: Date } = {}) {
+  const db = getDb();
+  const lead = await getLead(leadId);
+  if (!lead || lead.deletedAt || lead.paused) return null;
+  if (!["new", "researched"].includes(lead.stage)) return null;
+  if (await hasPendingOutbound(lead.id)) return null;
+
+  const settings = await getSettings();
+  if (!opts.force) {
+    if (settings.automationPaused) return null;
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(schema.actions)
+      .where(and(eq(schema.actions.status, "pending"), inArray(schema.actions.type, ["send_first", "follow_up", "connect"])));
+    if (n >= settings.dailyTarget) return null;
+  }
+
+  const channel = lead.bestChannel ?? (lead.linkedinUrl ? "linkedin" : lead.email ? "email" : "linkedin");
+  let type: "connect" | "send_first" = "send_first";
+  if (channel === "linkedin") {
+    if (lead.linkedinStatus === "pending") return null;
+    if (lead.linkedinStatus !== "connected") type = "connect";
+  }
+  // Already messaged once (e.g. by hand): nothing to start.
+  const [touched] = await db
+    .select({ id: schema.touchpoints.id })
+    .from(schema.touchpoints)
+    .where(
+      and(
+        eq(schema.touchpoints.leadId, lead.id),
+        eq(schema.touchpoints.direction, "out"),
+        inArray(schema.touchpoints.kind, type === "connect" ? ["connection_request", ...MESSAGE_KINDS] : [...MESSAGE_KINDS]),
+        isNull(schema.touchpoints.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (touched) return null;
+
+  return createOutreachTask(lead, type, channel, opts.now);
+}
+
+export async function createOutreachTask(lead: Lead, type: "connect" | "send_first", channel: string, now = new Date()) {
+  const db = getDb();
+  const [a] = await db
+    .insert(schema.actions)
+    .values({
+      leadId: lead.id,
+      type,
+      channel,
+      assignee: assigneeFor(lead),
+      priority: Math.min(95, 40 + Math.round((lead.score ?? 40) / 2) + (lead.tier === "high_value" ? 10 : 0)),
+      reason: lead.pitchAngle ?? lead.whyRelevant?.slice(0, 200) ?? "New lead",
+      draft: type === "connect" ? lead.connectionNote : lead.draftMessage,
+      subject: channel === "email" ? lead.emailSubject : null,
+      variantId: lead.variantId,
+      dueAt: now,
+      createdBy: "system",
+    })
+    .returning();
+  await record({
+    actor: "system",
+    entityType: "action",
+    entityId: a.id,
+    action: "create",
+    summary: `${type === "connect" ? "Connection request" : "First message"} ready for review: ${lead.fullName}`,
+  });
+  return a;
+}
+
 /**
  * Build today's queue:
- *  1. follow-ups for leads with no reply N days after our last message
- *  2. first messages for the best researched leads, up to the daily target
- * Leads that are paused, hands-off (assigned to a person instead), won or lost are respected.
+ *  1. follow-ups for leads with no reply N days after our last real message
+ *  2. first steps (connection request or message) for the best researched leads, up to the daily target
+ * Paused, hands-off (assigned to a person instead), won and lost leads are respected.
  */
 export async function buildDailyQueue(
   opts: { draft?: Drafter; now?: Date; includeUnresearched?: boolean } = {},
@@ -22,7 +118,6 @@ export async function buildDailyQueue(
 
   const cutoff = new Date(now.getTime() - settings.followUpDays * 86400_000);
 
-  // Leads that already have pending work are left alone.
   const pending = await db
     .select({ leadId: schema.actions.leadId })
     .from(schema.actions)
@@ -42,12 +137,18 @@ export async function buildDailyQueue(
     const tps = await db
       .select()
       .from(schema.touchpoints)
-      .where(and(eq(schema.touchpoints.leadId, lead.id), isNull(schema.touchpoints.deletedAt), sql`${schema.touchpoints.kind} <> 'note'`))
+      .where(
+        and(
+          eq(schema.touchpoints.leadId, lead.id),
+          isNull(schema.touchpoints.deletedAt),
+          notInArray(schema.touchpoints.kind, ["note", "connection_request", "connection_accepted"]),
+        ),
+      )
       .orderBy(desc(schema.touchpoints.occurredAt));
     const last = tps[0];
     if (!last || last.direction !== "out" || last.occurredAt > cutoff) continue;
     const outs = tps.filter((t) => t.direction === "out").length;
-    const followUpNumber = outs; // first message + N-1 follow-ups already sent
+    const followUpNumber = outs;
     if (followUpNumber > settings.maxFollowUps) {
       await db.update(schema.leads).set({ stage: "nurture", updatedAt: now }).where(eq(schema.leads.id, lead.id));
       await record({
@@ -82,61 +183,38 @@ export async function buildDailyQueue(
         createdBy: "system",
       })
       .returning();
-    await record({ actor: "system", entityType: "action", entityId: a.id, action: "create", summary: `Follow-up #${followUpNumber} queued for ${lead.fullName}` });
+    await record({ actor: "system", entityType: "action", entityId: a.id, action: "create", summary: `Follow-up #${followUpNumber} ready for review: ${lead.fullName}` });
     busy.add(lead.id);
     followUps++;
   }
 
-  // ---- 2. first messages, best first, up to the daily target
-  const [{ n: openToday }] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(schema.actions)
-    .where(and(eq(schema.actions.status, "pending"), inArray(schema.actions.type, ["send_first", "follow_up"])));
-  const room = Math.max(0, settings.dailyTarget - openToday);
+  // ---- 2. first steps, best first, up to the daily target
+  const candidates = await db
+    .select({ id: schema.leads.id })
+    .from(schema.leads)
+    .where(
+      and(
+        inArray(schema.leads.stage, ["researched", "new"]),
+        eq(schema.leads.paused, false),
+        isNull(schema.leads.deletedAt),
+        opts.includeUnresearched
+          ? sql`true`
+          : sql`(${schema.leads.stage} = 'researched' or ${schema.leads.score} is not null or ${schema.leads.owner} <> 'ai')`,
+      ),
+    )
+    .orderBy(
+      sql`case ${schema.leads.tier} when 'high_value' then 0 when 'event' then 1 else 2 end`,
+      sql`${schema.leads.score} desc nulls last`,
+      asc(schema.leads.createdAt),
+    )
+    .limit(settings.dailyTarget * 4);
 
   let firstTouches = 0;
-  if (room > 0) {
-    const candidates = await db
-      .select()
-      .from(schema.leads)
-      .where(
-        and(
-          inArray(schema.leads.stage, ["researched", "new"]),
-          eq(schema.leads.paused, false),
-          isNull(schema.leads.deletedAt),
-          sql`${schema.leads.lastTouchAt} is null`,
-          opts.includeUnresearched
-            ? sql`true`
-            : sql`(${schema.leads.stage} = 'researched' or ${schema.leads.score} is not null or ${schema.leads.owner} <> 'ai')`,
-        ),
-      )
-      .orderBy(
-        sql`case ${schema.leads.tier} when 'high_value' then 0 when 'event' then 1 else 2 end`,
-        sql`${schema.leads.score} desc nulls last`,
-        asc(schema.leads.createdAt),
-      )
-      .limit(room * 3);
-
-    for (const lead of candidates) {
-      if (firstTouches >= room) break;
-      if (busy.has(lead.id)) continue;
-      const [a] = await db
-        .insert(schema.actions)
-        .values({
-          leadId: lead.id,
-          type: "send_first",
-          channel: lead.bestChannel ?? (lead.linkedinUrl ? "linkedin" : lead.email ? "email" : "linkedin"),
-          assignee: assigneeFor(lead),
-          priority: Math.min(90, 40 + Math.round((lead.score ?? 40) / 2) + (lead.tier === "high_value" ? 10 : 0)),
-          reason: lead.whyRelevant ? lead.whyRelevant.slice(0, 200) : "New lead",
-          draft: lead.draftMessage,
-          variantId: lead.variantId,
-          dueAt: now,
-          createdBy: "system",
-        })
-        .returning();
-      await record({ actor: "system", entityType: "action", entityId: a.id, action: "create", summary: `First message queued for ${lead.fullName}` });
-      busy.add(lead.id);
+  for (const c of candidates) {
+    if (busy.has(c.id)) continue;
+    const a = await queueFirstTouch(c.id, { now });
+    if (a) {
+      busy.add(c.id);
       firstTouches++;
     }
   }

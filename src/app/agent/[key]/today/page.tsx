@@ -26,7 +26,7 @@ export default async function Today({
   return (
     <main>
       <Flash msg={sp.msg} err={sp.err} />
-      <H1>Today: {tasks.length} task{tasks.length === 1 ? "" : "s"}</H1>
+      <H1>Send: {tasks.length} approved task{tasks.length === 1 ? "" : "s"}</H1>
       <p className="text-zinc-600">
         LinkedIn sent today: {linkedinSentToday} of {s.linkedinDailyLimit}.
         {waitingApproval > 0 && ` ${waitingApproval} more are waiting for the team to approve.`}
@@ -57,6 +57,8 @@ export default async function Today({
               {c?.domain && <li>Website: {c.domain}</li>}
             </ul>
             {(a.reason || l.whyRelevant) && <p className="mt-2"><b>Why:</b> {l.whyRelevant ?? a.reason}</p>}
+            {l.pitchAngle && <p className="mt-1"><b>Pitch:</b> {l.pitchAngle}</p>}
+            {a.batch && <p className="mt-1 text-sm text-zinc-500">Batch: {a.batch}</p>}
             <p className="mt-1 text-sm">
               <Link className="text-blue-700 underline" href={`/agent/${key}/lead?id=${l.id}`}>Full history for {l.fullName}</Link>
             </p>
@@ -68,11 +70,21 @@ export default async function Today({
               <input type="hidden" name="channel" value={a.channel ?? "linkedin"} />
               <input type="hidden" name="name" value={l.fullName} />
               <input type="hidden" name="kind" value={a.type === "connect" ? "connection_request" : "message"} />
+              {a.channel === "email" && (
+                <label className="mb-2 block font-medium">
+                  Subject:
+                  <input name="subject" defaultValue={a.subject ?? ""} className="mt-1 w-full rounded border border-zinc-400 px-2 py-1.5" />
+                </label>
+              )}
               <label className="block font-medium">
-                {a.draft ? "Message to send (edit it, then paste exactly what you sent):" : "No draft yet: write a short, specific message using the Why line and their history, then paste exactly what you sent:"}
+                {a.type === "connect"
+                  ? "Send a LinkedIn connection request with this note (under 300 characters), then press Request sent:"
+                  : a.draft
+                    ? "Message to send (send it as is, then press Sent):"
+                    : "No draft yet: write a short, specific message using the Why line and their history, then paste exactly what you sent:"}
                 <textarea name="content" rows={5} defaultValue={a.draft ?? ""} className="mt-1 w-full rounded border border-zinc-400 px-2 py-1.5" />
               </label>
-              <div className="mt-2"><Submit>Sent</Submit></div>
+              <div className="mt-2"><Submit>{a.type === "connect" ? "Request sent" : "Sent"}</Submit></div>
             </form>
             <form action={skipTask} className="mt-3 flex flex-wrap items-end gap-2">
               <input type="hidden" name="key" value={key} />

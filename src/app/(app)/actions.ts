@@ -24,6 +24,7 @@ import { aiEnabled, parseAgentText, researchLead } from "@/lib/ai";
 import { executeAgentOps } from "@/lib/services/agent-ops";
 import { JOBS, type JobName } from "@/lib/jobs";
 import { parseCsv, rowsToLeads } from "@/lib/csv";
+import { saveRecommendation } from "@/lib/services/batches";
 import { CHANNELS, REPLY_LABELS, STAGES, TOUCH_KINDS } from "@/lib/constants";
 
 const s = (fd: FormData, k: string) => {
@@ -125,12 +126,26 @@ export async function bulkAddLeads(fd: FormData) {
 export async function saveLead(fd: FormData) {
   const user = await requireUser();
   const id = s(fd, "id");
-  const fields = ["fullName", "title", "email", "phone", "linkedinUrl", "location", "whyRelevant", "segment", "notes", "sourceDetail", "draftMessage"] as const;
+  const fields = [
+    "fullName", "title", "email", "phone", "linkedinUrl", "location", "whyRelevant", "relation", "pitchAngle",
+    "segment", "notes", "sourceDetail", "draftMessage", "connectionNote", "emailSubject",
+  ] as const;
   const patch: Record<string, unknown> = {};
   for (const f of fields) if (fd.has(f)) patch[f] = sOrNull(fd, f);
   if (fd.has("score")) patch.score = s(fd, "score") === "" ? null : Number(s(fd, "score"));
   for (const f of ["tier", "stage", "priority", "bestChannel", "owner"] as const) if (fd.has(f)) patch[f] = sOrNull(fd, f);
   if (fd.has("tags")) patch.tags = s(fd, "tags").split(",").map((t) => t.trim()).filter(Boolean);
+  if (fd.has("customFields")) {
+    // One "Column: value" per line. Lines removed are removed.
+    const next: Record<string, string | null> = {};
+    for (const line of s(fd, "customFields").split("\n")) {
+      const i = line.indexOf(":");
+      if (i > 0 && line.slice(i + 1).trim()) next[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    }
+    for (const k of s(fd, "customFieldKeys").split("\u0001").filter(Boolean)) if (!(k in next)) next[k] = null;
+    patch.customFields = next;
+  }
+  if (fd.has("linkedinStatus")) patch.linkedinStatus = sOrNull(fd, "linkedinStatus");
   if (!patch.fullName) delete patch.fullName;
   try {
     await updateLead(id, patch as LeadPatch, user);
@@ -302,7 +317,8 @@ export async function saveSettings(fd: FormData) {
   const patch: Partial<Settings> = {};
   if (fd.has("icp")) patch.icp = s(fd, "icp");
   if (fd.has("pitch")) patch.pitch = s(fd, "pitch");
-  for (const k of ["dailyTarget", "followUpDays", "maxFollowUps", "linkedinDailyLimit"] as const) {
+  if (fd.has("sourcingBrief")) patch.sourcingBrief = s(fd, "sourcingBrief");
+  for (const k of ["dailyTarget", "followUpDays", "maxFollowUps", "linkedinDailyLimit", "nightlyLeadTarget"] as const) {
     if (fd.has(k) && s(fd, k)) patch[k] = Math.max(0, Number(s(fd, k)));
   }
   if (fd.has("instinctMode")) patch.instinctMode = s(fd, "instinctMode") === "auto" ? "auto" : "approve";
@@ -355,4 +371,46 @@ export async function addEventForm(fd: FormData) {
   await findOrCreateEvent({ name: s(fd, "name"), url: sOrNull(fd, "url"), date: sOrNull(fd, "date"), location: sOrNull(fd, "location") }, user);
   refresh();
   go("/events", "Event added. Add its attendees with the event name filled in, or ask an agent to.");
+}
+
+// ---------------------------------------------------------------- review & send
+
+export async function submitReview(fd: FormData) {
+  const user = await requireUser();
+  const items = fd.getAll("item").map(String);
+  const selected = new Set(fd.getAll("ids").map(String));
+  const mode = s(fd, "mode");
+  const batch = sOrNull(fd, "batch");
+  const back = s(fd, "back") || "/review";
+
+  // Save any edited drafts first (marked as yours, so nothing overwrites them).
+  for (const id of items) {
+    const patch: Record<string, unknown> = {};
+    if (fd.has(`draft:${id}`) && s(fd, `draft:${id}`) !== s(fd, `orig:${id}`)) patch.draft = sOrNull(fd, `draft:${id}`);
+    if (fd.has(`subject:${id}`) && s(fd, `subject:${id}`) !== s(fd, `origsubject:${id}`)) patch.subject = sOrNull(fd, `subject:${id}`);
+    if (Object.keys(patch).length) await updateAction(id, patch, user);
+  }
+  const toApprove = mode === "all" ? items : items.filter((id) => selected.has(id));
+  if (mode === "save") {
+    refresh();
+    go(back, "Drafts saved.");
+  }
+  if (!toApprove.length) go(back, undefined, "Tick at least one message, or press Approve all.");
+  const n = await approveActions(toApprove, user, true, batch);
+  refresh();
+  go(back, `Approved ${n}. Instinct will send ${n === 1 ? "it" : "them"} and log each one${batch ? ` in batch "${batch}"` : ""}.`);
+}
+
+export async function skipReviewItem(fd: FormData) {
+  const user = await requireUser();
+  const id = s(fd, "skip");
+  if (id) await setActionStatus(id, "skipped", user, "skipped in review");
+  refresh();
+}
+
+export async function saveRecommendationForm(fd: FormData) {
+  const user = await requireUser();
+  await saveRecommendation({ title: s(fd, "title"), body: s(fd, "body"), batch: sOrNull(fd, "batch") }, user);
+  refresh();
+  go("/insights", "Saved.");
 }

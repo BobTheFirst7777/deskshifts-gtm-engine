@@ -1,7 +1,7 @@
 import { CHANNELS, CHANNEL_LABEL, REPLY_LABELS, REPLY_LABEL_TEXT } from "@/lib/constants";
 import { aiEnabled } from "@/lib/ai";
 import { Field, Flash, H1, H2, Submit } from "../../ui";
-import { freeTextUpdate, logReply } from "../actions";
+import { freeTextUpdate, logAccepted, logReply, saveRecommendationAgent } from "../actions";
 
 export default async function Log({
   params,
@@ -16,6 +16,15 @@ export default async function Log({
     <main>
       <Flash msg={sp.msg} err={sp.err} />
       <H1>Log replies and updates</H1>
+
+      <H2>A LinkedIn connection was accepted</H2>
+      <form action={logAccepted} className="rounded border border-zinc-400 p-4">
+        <input type="hidden" name="key" value={key} />
+        <Field label="Who accepted (LinkedIn URL or full name)" name="lead" required placeholder="https://www.linkedin.com/in/…" />
+        <Field label="Company (helps if you used a name)" name="company" />
+        <Submit>Log accepted</Submit>
+        <p className="mt-2 text-sm text-zinc-600">Their first message then goes to the team for approval. Don&apos;t message them until it shows on your Send page.</p>
+      </form>
 
       <H2>A reply came in</H2>
       <form action={logReply} className="rounded border border-zinc-400 p-4">
@@ -40,6 +49,16 @@ export default async function Log({
         </label>
         <Field label="Their reply, word for word" name="content" textarea />
         <Submit>Log reply</Submit>
+      </form>
+
+      <H2>Recommendations for the team</H2>
+      <form action={saveRecommendationAgent} className="rounded border border-zinc-400 p-4">
+        <input type="hidden" name="key" value={key} />
+        <p className="mb-2 text-sm text-zinc-600">After a batch has had 3+ days: what worked, what didn&apos;t (with numbers), and what to change next.</p>
+        <Field label="Title" name="title" required placeholder="Nov 22 LinkedIn batch: what worked" />
+        <Field label="Batch name (optional)" name="batch" />
+        <Field label="Recommendations" name="body" textarea required />
+        <Submit>Save recommendations</Submit>
       </form>
 
       <H2>Or just write what happened</H2>

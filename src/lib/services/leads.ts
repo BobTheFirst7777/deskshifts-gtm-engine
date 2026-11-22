@@ -49,6 +49,12 @@ export const leadInput = z.object({
   score: opt(z.coerce.number().int().min(0).max(100)),
   priority: opt(z.enum(PRIORITIES)),
   whyRelevant: optStr(),
+  relation: optStr().describe("How this company and person relate to Deskshift"),
+  pitchAngle: optStr().describe("What to target them for / the angle to pitch"),
+  customFields: opt(z.record(z.string(), z.string())).describe("Extra research columns, e.g. {\"Support team size\": \"12\"}"),
+  connectionNote: optStr().describe("LinkedIn connection request note, under 300 characters"),
+  draftMessage: optStr().describe("First message (LinkedIn message after connecting, or email body)"),
+  emailSubject: optStr(),
   bestChannel: opt(z.enum(CHANNELS)),
   owner: optStr(),
   segment: optStr(),
@@ -76,6 +82,12 @@ export const leadPatch = z
     score: z.coerce.number().int().min(0).max(100).nullish(),
     priority: z.enum(PRIORITIES).nullish(),
     whyRelevant: z.string().nullish(),
+    relation: z.string().nullish(),
+    pitchAngle: z.string().nullish(),
+    customFields: z.record(z.string(), z.string().nullable()).nullish(),
+    connectionNote: z.string().nullish(),
+    emailSubject: z.string().nullish(),
+    linkedinStatus: z.enum(["pending", "connected"]).nullish(),
     bestChannel: z.enum(CHANNELS).nullish(),
     owner: z.string().nullish(),
     segment: z.string().nullish(),
@@ -341,6 +353,12 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
     score: input.score ?? null,
     priority: input.priority ?? null,
     whyRelevant: input.whyRelevant ?? null,
+    relation: input.relation ?? null,
+    pitchAngle: input.pitchAngle ?? null,
+    customFields: input.customFields ?? {},
+    connectionNote: input.connectionNote ?? null,
+    draftMessage: input.draftMessage ?? null,
+    emailSubject: input.emailSubject ?? null,
     bestChannel: input.bestChannel ?? null,
     owner: input.owner ?? (input.handsOff && isHuman(actor) ? actor : "ai"),
     segment: input.segment ?? null,
@@ -361,6 +379,13 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
     for (const [k, v] of Object.entries(values)) {
       if (v === null || v === undefined) continue;
       if (Array.isArray(v) && !v.length) continue;
+      if (k === "customFields") {
+        const add = Object.fromEntries(
+          Object.entries(v as Record<string, string>).filter(([ck]) => !(ck in dup.customFields) && !dup.manualFields.includes(`custom:${ck}`)),
+        );
+        if (Object.keys(add).length) fill.customFields = { ...dup.customFields, ...add };
+        continue;
+      }
       const cur = (dup as Record<string, unknown>)[k];
       const empty = cur === null || cur === undefined || cur === "" || (Array.isArray(cur) && !cur.length);
       if (empty && !dup.manualFields.includes(k)) fill[k] = v;
@@ -395,8 +420,14 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
 
   const manual = isHuman(actor)
     ? Object.entries(values)
-        .filter(([k, v]) => v !== null && !(Array.isArray(v) && !v.length) && !["stage", "source", "tier", "owner", "handsOff"].includes(k))
+        .filter(
+          ([k, v]) =>
+            v !== null &&
+            !(Array.isArray(v) && !v.length) &&
+            !["stage", "source", "tier", "owner", "handsOff", "customFields"].includes(k),
+        )
         .map(([k]) => k)
+        .concat(Object.keys(values.customFields).map((ck) => `custom:${ck}`))
     : [];
 
   const [lead] = await db
@@ -486,6 +517,19 @@ export async function updateLead(
       continue;
     }
     let v = patch[k];
+    if (k === "customFields") {
+      const next = { ...current.customFields };
+      for (const [ck, cv] of Object.entries((v ?? {}) as Record<string, string | null>)) {
+        if (!human && current.manualFields.includes(`custom:${ck}`)) {
+          skipped.push(`custom:${ck}`);
+          continue;
+        }
+        if (cv === null || cv === "") delete next[ck];
+        else next[ck] = cv;
+      }
+      clean.customFields = next;
+      continue;
+    }
     if (k === "linkedinUrl") v = normalizeLinkedin(v as string);
     if (k === "email") v = normalizeEmail(v as string);
     if (k === "tags" && v === null) v = [];
@@ -496,8 +540,15 @@ export async function updateLead(
   const d = diff(current as unknown as Record<string, unknown>, clean);
   if (!d.changed.length) return { lead: current, changed: [], skipped };
 
+  let manualChanged = d.changed.filter((k) => !["paused", "linkedinStatus", "customFields"].includes(k));
+  if (d.changed.includes("customFields")) {
+    const before = (d.before.customFields ?? {}) as Record<string, string>;
+    const after = (d.after.customFields ?? {}) as Record<string, string>;
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    manualChanged = manualChanged.concat([...keys].filter((ck) => before[ck] !== after[ck]).map((ck) => `custom:${ck}`));
+  }
   const manual = isHuman(actor)
-    ? Array.from(new Set([...current.manualFields, ...d.changed.filter((k) => k !== "paused")]))
+    ? Array.from(new Set([...current.manualFields, ...manualChanged]))
     : current.manualFields;
 
   const [lead] = await db

@@ -111,6 +111,7 @@ export default async function LeadPage({
             {l.segment && <Badge>{l.segment}</Badge>}
             {l.handsOff && <Badge tone="red">Hands-off</Badge>}
             {l.paused && <Badge>Paused</Badge>}
+            {l.linkedinStatus && <Badge tone={l.linkedinStatus === "connected" ? "green" : "zinc"}>LinkedIn {l.linkedinStatus === "connected" ? "connected" : "request pending"}</Badge>}
             <span className="text-xs text-zinc-500">
               via <ActorTag actor={l.source} />{l.sourceDetail ? ` · ${l.sourceDetail}` : ""}
               {ev && <> · <Link className="underline" href={`/events?id=${ev.id}`}>{ev.name}</Link></>}
@@ -154,17 +155,46 @@ export default async function LeadPage({
       <div className="grid gap-6 lg:grid-cols-3">
         {/* ---------- left: story */}
         <div className="space-y-6 lg:col-span-2">
-          {(l.whyRelevant || d.signals.length > 0) && (
-            <Card title="Why this lead">
-              {l.whyRelevant && <p className="text-sm leading-relaxed text-zinc-800">{l.whyRelevant}</p>}
+          {(l.whyRelevant || l.relation || l.pitchAngle || d.signals.length > 0 || Object.keys(l.customFields).length > 0) && (
+            <Card title="Research" actions={l.researchedBy && <span className="text-xs text-zinc-500">by <ActorTag actor={l.researchedBy} /> · {timeAgo(l.researchedAt)}</span>}>
+              <dl className="space-y-3 text-sm">
+                {l.relation && (
+                  <div>
+                    <dt className="text-xs font-medium text-zinc-500">How they relate to us</dt>
+                    <dd className="mt-0.5 leading-relaxed text-zinc-800">{l.relation}</dd>
+                  </div>
+                )}
+                {l.whyRelevant && (
+                  <div>
+                    <dt className="text-xs font-medium text-zinc-500">Why now</dt>
+                    <dd className="mt-0.5 leading-relaxed text-zinc-800">{l.whyRelevant}</dd>
+                  </div>
+                )}
+                {l.pitchAngle && (
+                  <div>
+                    <dt className="text-xs font-medium text-zinc-500">What to pitch</dt>
+                    <dd className="mt-0.5 leading-relaxed text-zinc-800">{l.pitchAngle}</dd>
+                  </div>
+                )}
+                {Object.keys(l.customFields).length > 0 && (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-lg bg-zinc-50 p-3 sm:grid-cols-3">
+                    {Object.entries(l.customFields).map(([k, v]) => (
+                      <div key={k}>
+                        <dt className="text-[11px] font-medium text-zinc-500">{k}</dt>
+                        <dd className="text-sm text-zinc-800">{v}</dd>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </dl>
               {d.signals.length > 0 && (
-                <ul className="mt-3 space-y-1.5">
-                  {d.signals.map((s) => (
-                    <li key={s.id} className="flex gap-2 text-sm">
-                      <Badge tone="blue">{s.type}</Badge>
+                <ul className="mt-3 space-y-1.5 border-t border-zinc-100 pt-3">
+                  {d.signals.map((sg) => (
+                    <li key={sg.id} className="flex gap-2 text-sm">
+                      <Badge tone="blue">{sg.type}</Badge>
                       <span className="text-zinc-700">
-                        {s.summary}{" "}
-                        {s.url && <a className="text-accent-600 hover:underline" href={s.url} target="_blank">source ↗</a>}
+                        {sg.summary}{" "}
+                        {sg.url && <a className="text-accent-600 hover:underline" href={sg.url} target="_blank">source ↗</a>}
                       </span>
                     </li>
                   ))}
@@ -184,7 +214,8 @@ export default async function LeadPage({
                     options={[
                       ["out:message", "We sent a message"],
                       ["in:message", "They replied"],
-                      ["out:connection_request", "Connection request"],
+                      ["out:connection_request", "Connection request sent"],
+                      ["in:connection_accepted", "Connection accepted"],
                       ["out:call", "Call"],
                       ["out:meeting", "Meeting"],
                       ["out:note", "Note"],
@@ -212,15 +243,16 @@ export default async function LeadPage({
                     <span
                       className={cx(
                         "absolute -left-[27px] top-1 size-3 rounded-full ring-4 ring-white",
-                        t.kind === "note" ? "bg-zinc-300" : t.direction === "in" ? "bg-amber-500" : "bg-accent-500",
+                        t.kind === "note" ? "bg-zinc-300" : t.kind === "connection_accepted" ? "bg-emerald-500" : t.direction === "in" ? "bg-amber-500" : "bg-accent-500",
                       )}
                     />
                     <div className="flex flex-wrap items-center gap-x-2 text-xs text-zinc-500">
                       <span className="font-medium text-zinc-800">
-                        {t.kind === "note" ? "Note" : t.direction === "in" ? "They replied" : t.kind === "connection_request" ? "Connection request" : t.kind === "call" ? "Call" : t.kind === "meeting" ? "Meeting" : "We sent"}
+                        {t.kind === "note" ? "Note" : t.kind === "connection_accepted" ? "Accepted connection" : t.direction === "in" ? "They replied" : t.kind === "connection_request" ? "Connection request" : t.kind === "call" ? "Call" : t.kind === "meeting" ? "Meeting" : "We sent"}
                       </span>
                       <span>· {CHANNEL_LABEL[t.channel] ?? t.channel}</span>
                       {t.replyLabel && <Badge tone="amber">{REPLY_LABEL_TEXT[t.replyLabel]}</Badge>}
+                      {t.batch && <Link href={`/batches?name=${encodeURIComponent(t.batch)}`} className="hover:underline">· {t.batch}</Link>}
                       <span>· <ActorTag actor={t.createdBy} /></span>
                       <span title={t.occurredAt.toISOString()}>· {dateTime(t.occurredAt)}</span>
                       <form action={deleteTouchpointAction} className="ml-auto opacity-0 transition hover:opacity-100 [li:hover_&]:opacity-60">
@@ -340,8 +372,19 @@ export default async function LeadPage({
                 <Field label="Owner" hint={manual("owner")}><Select name="owner" defaultValue={l.owner} options={owners} /></Field>
                 <Field label="Segment" hint={manual("segment")}><Input name="segment" defaultValue={l.segment ?? ""} /></Field>
               </div>
-              <Field label="Why relevant" hint={manual("whyRelevant")}><Textarea name="whyRelevant" defaultValue={l.whyRelevant ?? ""} rows={3} /></Field>
-              <Field label="First-message draft" hint={manual("draftMessage")}><Textarea name="draftMessage" defaultValue={l.draftMessage ?? ""} rows={3} /></Field>
+              <Field label="How they relate to us" hint={manual("relation")}><Textarea name="relation" defaultValue={l.relation ?? ""} rows={3} /></Field>
+              <Field label="Why now" hint={manual("whyRelevant")}><Textarea name="whyRelevant" defaultValue={l.whyRelevant ?? ""} rows={2} /></Field>
+              <Field label="What to pitch" hint={manual("pitchAngle")}><Textarea name="pitchAngle" defaultValue={l.pitchAngle ?? ""} rows={2} /></Field>
+              <Field label="Extra columns" hint="one “Column: value” per line">
+                <input type="hidden" name="customFieldKeys" value={Object.keys(l.customFields).join("\u0001")} />
+                <Textarea name="customFields" defaultValue={Object.entries(l.customFields).map(([k, v]) => `${k}: ${v}`).join("\n")} rows={3} />
+              </Field>
+              <Field label="LinkedIn" hint={manual("linkedinStatus")}>
+                <Select name="linkedinStatus" defaultValue={l.linkedinStatus ?? ""} options={[["", "Not connected"], ["pending", "Request pending"], ["connected", "Connected"]]} />
+              </Field>
+              <Field label="Connection note" hint={`${(l.connectionNote ?? "").length}/300`}><Textarea name="connectionNote" defaultValue={l.connectionNote ?? ""} rows={2} /></Field>
+              <Field label="First message" hint={manual("draftMessage")}><Textarea name="draftMessage" defaultValue={l.draftMessage ?? ""} rows={3} /></Field>
+              <Field label="Email subject" hint={manual("emailSubject")}><Input name="emailSubject" defaultValue={l.emailSubject ?? ""} /></Field>
               <Field label="Notes" hint={manual("notes")}><Textarea name="notes" defaultValue={l.notes ?? ""} rows={3} /></Field>
               <Field label="Tags" hint="comma separated"><Input name="tags" defaultValue={l.tags.join(", ")} /></Field>
               {c && (

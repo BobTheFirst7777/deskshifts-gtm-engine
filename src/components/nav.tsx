@@ -6,6 +6,8 @@ import { cx } from "./ui";
 
 const items = [
   { href: "/", label: "Today", icon: "M3 12l9-9 9 9M5 10v10h14V10" },
+  { href: "/review", label: "Review & send", icon: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" },
+  { href: "/batches", label: "Batches", icon: "M4 6h16M4 12h16M4 18h10" },
   { href: "/leads", label: "Leads", icon: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21v-1a6 6 0 0112 0v1M18 8a3 3 0 010 6M22 21v-1a4 4 0 00-3-3.87" },
   { href: "/pipeline", label: "Pipeline", icon: "M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v5h-4z" },
   { href: "/experiments", label: "Experiments", icon: "M9 3h6M10 3v6L4 19a1 1 0 00.9 1.5h14.2A1 1 0 0020 19l-6-10V3" },
@@ -15,7 +17,7 @@ const items = [
   { href: "/settings", label: "Settings", icon: "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" },
 ];
 
-export function Nav({ counts }: { counts: { needsYou: number } }) {
+export function Nav({ counts }: { counts: { needsYou: number; toReview: number } }) {
   const path = usePathname();
   return (
     <nav className="flex flex-col gap-0.5">
@@ -34,9 +36,9 @@ export function Nav({ counts }: { counts: { needsYou: number } }) {
               <path d={it.icon} />
             </svg>
             <span className="flex-1">{it.label}</span>
-            {it.href === "/" && counts.needsYou > 0 && (
+            {((it.href === "/" && counts.needsYou > 0) || (it.href === "/review" && counts.toReview > 0)) && (
               <span className={cx("rounded-full px-1.5 text-[11px] font-semibold tabular-nums", active ? "bg-white/20" : "bg-amber-100 text-amber-800")}>
-                {counts.needsYou}
+                {it.href === "/" ? counts.needsYou : counts.toReview}
               </span>
             )}
           </Link>

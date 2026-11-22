@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { overview, replyBreakdown, type BreakdownRow } from "./stats";
 import { record } from "./activity";
@@ -32,7 +32,7 @@ export async function runWeeklyReview(write?: Writer) {
     .select({ tp: schema.touchpoints, lead: schema.leads })
     .from(schema.touchpoints)
     .innerJoin(schema.leads, eq(schema.touchpoints.leadId, schema.leads.id))
-    .where(and(eq(schema.touchpoints.direction, "in"), gte(schema.touchpoints.occurredAt, start), isNull(schema.touchpoints.deletedAt)))
+    .where(and(eq(schema.touchpoints.direction, "in"), ne(schema.touchpoints.kind, "connection_accepted"), gte(schema.touchpoints.occurredAt, start), isNull(schema.touchpoints.deletedAt)))
     .orderBy(desc(schema.touchpoints.occurredAt))
     .limit(15);
   const sample = replies.map((r) => `${r.lead.fullName} (${r.lead.segment ?? r.lead.tier}, ${r.tp.channel}, ${r.tp.replyLabel ?? "unlabelled"}): ${(r.tp.content ?? "").slice(0, 400)}`);

@@ -8,9 +8,14 @@ import { overview, replyBreakdown } from "@/lib/services/stats";
 import { createVariant, listVariants } from "@/lib/services/variants";
 import { addLeads, leadRefInput, logForLead } from "@/lib/ops";
 import { JOBS } from "@/lib/jobs";
+import { agentBrief } from "@/lib/services/brief";
+import { researchInput, researchQueue, saveResearch } from "@/lib/services/research";
+import { batchResultsForAgents, latestInsights, recommendationInput, saveRecommendation } from "@/lib/services/batches";
 
 const INSTRUCTIONS = `This is Deskshift's outbound engine: one shared record of every lead, message and reply.
+- Start every session with get_brief: it says what we sell, who to find, the workflow, what's waiting, and the latest recommendations.
 - Before writing to someone, call search or get_lead to see their full history.
+- Research new leads from get_research_queue and save it with save_research. Nothing is sent until a person approves it.
 - When you find good prospects, call add_leads (duplicates merge automatically; include whyRelevant and any signals with URLs).
 - After you send a message or see a reply, call log_touchpoint. Replies stop automatic follow-ups.
 - Fields the team edited by hand are protected; update_lead reports them as skipped. Don't fight that.
@@ -40,6 +45,79 @@ const wrap =
 export function mcpHandlerFor(actor: string) {
   return createMcpHandler(
     (server) => {
+      server.registerTool(
+        "get_brief",
+        {
+          title: "Get the brief",
+          description:
+            "Call this first. What Deskshift sells, who to look for and how, how many leads per night, the step-by-step workflow, what's waiting (to research / to approve), recent batch results and the latest recommendations.",
+          inputSchema: z.object({}),
+        },
+        wrap(async () => agentBrief()),
+      );
+
+      server.registerTool(
+        "get_research_queue",
+        {
+          title: "Leads waiting for research",
+          description: "New leads nobody has researched yet. Research each one (web, LinkedIn, company site) and save it with save_research.",
+          inputSchema: z.object({ limit: z.number().int().max(100).optional() }),
+        },
+        wrap(async ({ limit }: { limit?: number }) =>
+          (await researchQueue(limit ?? 25)).map((r) => ({
+            leadId: r.lead.id,
+            name: r.lead.fullName,
+            title: r.lead.title,
+            company: r.company?.name ?? null,
+            website: r.company?.domain ?? null,
+            linkedinUrl: r.lead.linkedinUrl,
+            email: r.lead.email,
+            source: r.lead.source,
+            sourceDetail: r.lead.sourceDetail,
+            notesSoFar: r.lead.whyRelevant ?? r.lead.notes,
+          })),
+        ),
+      );
+
+      server.registerTool(
+        "save_research",
+        {
+          title: "Save research on a lead",
+          description:
+            "Save your research and drafts for one lead. Fills: how they relate to us, why now, what to pitch, importance 0-100, best channel, drafts (LinkedIn connection note < 300 chars, first message, email subject), signals with URLs, and any extra columns in customFields. The lead's first step (connection request or message) then appears on the Review & send page for approval. The team's own edits are never overwritten.",
+          inputSchema: researchInput,
+        },
+        wrap(async (args: Record<string, unknown>) => saveResearch(args as never, actor)),
+      );
+
+      server.registerTool(
+        "get_batch_results",
+        {
+          title: "Batch results",
+          description:
+            "Without a name: recent batches with sent / accepted / replied counts. With a batch name: every person in it, what was sent, whether they accepted or replied, their reply text, and days waiting.",
+          inputSchema: z.object({ batch: z.string().optional() }),
+        },
+        wrap(async ({ batch }: { batch?: string }) => batchResultsForAgents(batch)),
+      );
+
+      server.registerTool(
+        "save_recommendations",
+        {
+          title: "Save recommendations",
+          description:
+            "Write what worked, what didn't (with numbers) and what to change next: segments, channels, angles, message wording. Shown to the team on Insights and given to every agent in get_brief.",
+          inputSchema: recommendationInput,
+        },
+        wrap(async (args: { title: string; body: string; batch?: string | null }) => saveRecommendation(args, actor)),
+      );
+
+      server.registerTool(
+        "get_recommendations",
+        { title: "Latest recommendations", description: "The most recent recommendations and weekly reviews.", inputSchema: z.object({}) },
+        wrap(async () => latestInsights(5)),
+      );
+
       server.registerTool(
         "search",
         {
@@ -149,13 +227,16 @@ export function mcpHandlerFor(actor: string) {
         {
           title: "Log a message, reply, call, meeting or note",
           description:
-            "Record outreach. direction 'out' = we sent it; 'in' = they replied. Pass leadId, or lead {linkedinUrl|email|name}. Replies stop automatic follow-ups and alert the team.",
+            "Record outreach. direction 'out' = we sent it; 'in' = they replied or accepted. Pass leadId, or lead {linkedinUrl|email|name}, and taskId as actionId when you're doing a task. Replies stop automatic follow-ups and alert the team; an accepted connection queues the first message for review.",
           inputSchema: z.object({
             leadId: z.string().optional(),
             lead: leadRefInput.optional(),
             channel: z.enum(CHANNELS),
             direction: z.enum(["out", "in"]),
-            kind: z.enum(["message", "connection_request", "call", "meeting", "note"]).optional(),
+            kind: z
+              .enum(["message", "connection_request", "connection_accepted", "call", "meeting", "note"])
+              .optional()
+              .describe("connection_request when you send a LinkedIn invite; connection_accepted (direction in) when they accept"),
             content: z.string().optional().describe("Exact text sent or received"),
             replyLabel: z.enum(REPLY_LABELS).optional(),
             actionId: z.string().optional().describe("The task this fulfils, if any"),

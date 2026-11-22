@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { listQueue } from "@/lib/services/actions";
+import { listQueue, reviewQueue } from "@/lib/services/actions";
 import { getSettings } from "@/lib/services/settings";
 import { Nav } from "@/components/nav";
 import { logout, setAutomationPaused } from "./actions";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  const [mine, settings] = await Promise.all([listQueue({ assignee: user }), getSettings()]);
+  const [mine, review, settings] = await Promise.all([listQueue({ assignee: user }), reviewQueue(), getSettings()]);
 
   return (
     <div className="flex min-h-screen">
@@ -24,7 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         >
           <span className="text-base leading-none">+</span> Add leads
         </Link>
-        <Nav counts={{ needsYou: mine.length }} />
+        <Nav counts={{ needsYou: mine.length, toReview: review.length }} />
         <div className="mt-auto space-y-3 px-1">
           <form action={setAutomationPaused} className="rounded-lg border border-zinc-200 bg-white p-2.5">
             <input type="hidden" name="paused" value={settings.automationPaused ? "false" : "true"} />

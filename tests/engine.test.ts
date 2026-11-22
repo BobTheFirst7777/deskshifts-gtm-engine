@@ -210,3 +210,98 @@ describe("stats", () => {
     expect(review.body).toContain("By channel");
   });
 });
+
+// ---------------------------------------------------------------- agent research → review → batches
+import { researchQueue, saveResearch } from "@/lib/services/research";
+import { approveActions, reviewQueue } from "@/lib/services/actions";
+import { batchDetail, listBatches, saveRecommendation } from "@/lib/services/batches";
+import { queueFirstTouch } from "@/lib/services/queue";
+import { agentBrief } from "@/lib/services/brief";
+import { addLeads } from "@/lib/ops";
+
+describe("agent research and the LinkedIn sequence", () => {
+  it("runs research → connection request → accepted → message → reply, tracked by batch", async () => {
+    const { lead } = await addLead({ fullName: "Nina Park", company: "Cartwheel", linkedinUrl: "linkedin.com/in/ninapark" }, "chatgpt");
+    expect((await researchQueue()).some((r) => r.lead.id === lead.id)).toBe(true);
+
+    const saved = await saveResearch(
+      {
+        leadId: lead.id,
+        relation: "Cartwheel's dashboard has 40 settings screens; new admins get lost.",
+        whyRelevant: "Posted last week about onboarding tickets doubling.",
+        pitchAngle: "Dex as the in-app onboarding guide for new admins",
+        importance: 86,
+        bestChannel: "linkedin",
+        connectionNote: "Hi Nina, loved your post on onboarding tickets. Building something for exactly that, would love to connect.",
+        draftMessage: "Thanks for connecting, Nina! Quick one: …",
+        customFields: { "Support team size": "6" },
+        signals: [{ type: "post", summary: "Onboarding tickets doubled", url: "https://linkedin.com/posts/x" }],
+      },
+      "instinct",
+    );
+    expect(saved.queued?.type).toBe("connect");
+    expect((await researchQueue()).some((r) => r.lead.id === lead.id)).toBe(false);
+
+    const review = await reviewQueue();
+    const task = review.find((r) => r.lead.id === lead.id)!.action;
+    expect(task.draft).toContain("loved your post");
+
+    await approveActions([task.id], "ishan");
+    const [approved] = await getDb().select().from(schema.actions).where(eq(schema.actions.id, task.id));
+    expect(approved.batch).toMatch(/LinkedIn$/);
+
+    await logTouchpoint({ leadId: lead.id, actionId: task.id, channel: "linkedin", direction: "out", kind: "connection_request", content: task.draft, occurredAt: daysAgo(5) }, "instinct");
+    let d = (await getLeadDetail(lead.id))!;
+    expect(d.lead.linkedinStatus).toBe("pending");
+    expect(d.lead.stage).toBe("researched");
+    expect(await queueFirstTouch(lead.id)).toBeNull(); // waiting for acceptance
+    const fu = await buildDailyQueue();
+    expect(fu.followUps).toBe(0); // no follow-up on a pending connection
+
+    const acc = await logTouchpoint({ leadId: lead.id, channel: "linkedin", direction: "in", kind: "connection_accepted" }, "instinct");
+    expect((acc as { queued?: { type: string } }).queued?.type).toBe("send_first");
+    d = (await getLeadDetail(lead.id))!;
+    expect(d.lead.linkedinStatus).toBe("connected");
+    const msgTask = d.actions.find((a) => a.type === "send_first" && a.status === "pending")!;
+    expect(msgTask.draft).toContain("Thanks for connecting");
+
+    await approveActions([msgTask.id], "ishan", true, "Test batch");
+    await logTouchpoint({ leadId: lead.id, actionId: msgTask.id, channel: "linkedin", direction: "out", content: msgTask.draft }, "instinct");
+    await logTouchpoint({ leadId: lead.id, channel: "linkedin", direction: "in", content: "Sure, send a demo", replyLabel: "interested" }, "instinct");
+
+    const b = await batchDetail("Test batch");
+    expect(b.summary.sent).toBe(1);
+    expect(b.summary.replied).toBe(1);
+    expect(b.rows[0].reply?.content).toBe("Sure, send a demo");
+
+    const conn = await batchDetail(approved.batch!);
+    expect(conn.summary.connectionRequests).toBe(1);
+    expect(conn.summary.accepted).toBe(1);
+    expect((await listBatches()).map((x) => x.name)).toEqual(expect.arrayContaining(["Test batch", approved.batch]));
+
+    await saveRecommendation({ title: "Test batch learnings", body: "Onboarding angle worked.", batch: "Test batch" }, "chatgpt");
+    const brief = await agentBrief();
+    expect(brief.latestRecommendations[0].title).toBe("Test batch learnings");
+  });
+
+  it("protects custom columns a person edited, but lets agents add new ones", async () => {
+    const [{ lead }] = await listLeads({ q: "Nina Park" });
+    await updateLead(lead.id, { customFields: { "Support team size": "8 (Ishan checked)" } }, "ishan");
+    const r = await updateLead(lead.id, { customFields: { "Support team size": "6", "Uses Intercom": "yes" } }, "chatgpt");
+    expect(r.skipped).toEqual(["custom:Support team size"]);
+    expect(r.lead.customFields).toEqual({ "Support team size": "8 (Ishan checked)", "Uses Intercom": "yes" });
+  });
+
+  it("queues leads that arrive already researched", async () => {
+    const res = await addLeads(
+      [{ fullName: "Omar Haddad", company: "Shiftbase", email: "omar@shiftbase.com", whyRelevant: "Hiring support", pitchAngle: "Ticket deflection", score: 80, bestChannel: "email", draftMessage: "Hi Omar…", emailSubject: "Support at Shiftbase" }],
+      "chatgpt",
+    );
+    const id = (res.results[0] as { id: string }).id;
+    const d = (await getLeadDetail(id))!;
+    expect(d.lead.stage).toBe("researched");
+    const t = d.actions.find((a) => a.status === "pending")!;
+    expect(t.type).toBe("send_first");
+    expect(t.subject).toBe("Support at Shiftbase");
+  });
+});

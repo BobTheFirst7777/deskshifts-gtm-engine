@@ -9,21 +9,30 @@ One shared record of every lead, message and reply for Deskshift, with four ways
 | Ishan, Tanzil | Dashboard: Today, Leads, lead timeline, Pipeline, Experiments, Insights, Events, Activity, Settings |
 | The engine | Daily jobs: research and scoring, building the queue (with 3-day follow-ups), and the weekly review |
 
-## How it behaves
+## The daily workflow
 
-- **Anyone can add leads.** ChatGPT, Claude, Instinct and people add leads the same way. A lead that already exists (same LinkedIn, email, or name at the same company) is merged: empty fields are filled and nothing is duplicated. Each lead records who added it.
-- **People always win.** Any field a person edits is marked *set by hand*. Agents and jobs never overwrite it; the API reports those fields as `skipped`.
-- **Everything can be done by hand.** Add, edit, log a message or reply, create or finish tasks, move stages, pause a lead, or pause everything. Manual updates trigger the same follow-on actions as agent updates: logging a reply by hand cancels follow-ups, just as it does when Instinct logs it.
-- **Undo anything.** Every change is in Activity with who made it, and most can be undone in one click. Deletes are soft.
-- **Hands-off leads** are worked by a person, never by Instinct.
-- **Approve-first mode** (default): Instinct only sees tasks you approve on Today. Switch to auto in Settings.
-- **The loop:**
-  1. Research scores new leads and drafts a first message.
-  2. The queue picks the best 30 a day.
-  3. Instinct sends and logs each message.
-  4. If there's no reply in 3 days, the queue adds a follow-up with a new angle.
-  5. A reply stops follow-ups and creates a "Respond" task for you.
-  6. The weekly review compares reply rates by message version, channel, segment and tier, and research uses the latest review when it writes new drafts.
+1. **8pm, find leads.** ChatGPT (your prompt, or a nightly run) and Instinct call `get_brief`, then add leads with `add_leads`. Duplicates merge. New leads start in **New**.
+2. **Research.** Agents pick up `get_research_queue` (Instinct uses its **Research** page) and save each lead with `save_research`. That fills these columns:
+   - how they relate to us
+   - why now
+   - what to pitch
+   - importance (0–100)
+   - best channel
+   - signals with links
+   - any extra columns they want
+   - the drafts: a LinkedIn connection note under 300 characters, the first message, and an email subject
+3. **Next step is queued.** For LinkedIn leads that's a **connection request**; once the connection is accepted, the **first message**. Email leads go straight to the message. Each step goes to **Review & send**.
+4. **You approve** on Review & send: scroll, edit inline, then approve some or all. Approved sends become a **batch**, by default "Nov 22 · LinkedIn", or named by you.
+5. **Instinct sends** only approved tasks (its **Send** page) and logs each one. It also logs accepted connections and replies. A reply stops follow-ups and creates a "Respond" task for you.
+6. **Results.** The **Batches** page shows for each batch who was sent what, who accepted, who replied (with their reply) and who's silent. Agents read the same thing with `get_batch_results`.
+7. **Recommendations.** Agents write what worked and what to change with `save_recommendations`. These show on **Insights**, and every agent reads the latest ones in `get_brief` before writing new drafts.
+
+Other rules that always apply:
+- **People win:** fields you edit are never overwritten by agents.
+- **Hands-off leads** are yours alone; Instinct won't touch them.
+- **Undo:** anything can be undone from Activity.
+- **Pause:** one lead or everything.
+- **Follow-ups:** a follow-up is queued 3 days after an unanswered *message*. Pending connection requests don't trigger them.
 
 ## Deploy on Vercel (about 10 minutes)
 
@@ -49,12 +58,17 @@ One shared record of every lead, message and reply for Deskshift, with four ways
 Open **Settings** in the dashboard. It shows the exact URLs with your keys.
 
 - **Claude:** Settings → Connectors → *Add custom connector* → paste `https://<app>/api/mcp/<claude key>`.
-- **ChatGPT:** Settings → Apps & Connectors → enable developer mode → *Create* → paste `https://<app>/api/mcp/<chatgpt key>`.
-  Or, in a Custom GPT, go to *Actions → Import from URL* → `https://<app>/api/openapi.json`, then set auth to API key, Bearer, and your ChatGPT key.
+- **ChatGPT:** chatgpt.com/plugins → **+** → *Add custom MCP server* → paste `https://<app>/api/mcp/<chatgpt key>`, no authentication. In a chat, type **@** and pick it. Settings shows a ready-made nightly prompt.
 - **Instinct:** text it `https://<app>/agent/<instinct key>` and say: *"This is your outreach console. Read the Rules page and follow it every day. Log everything you send and every reply there."*
   Then ask it to find leads, for example: *"Find 20 heads of customer success at Series A SaaS companies in SF and add them on the Add leads page."*
 
 MCP tools:
+- `get_brief`
+- `get_research_queue`
+- `save_research`
+- `get_batch_results`
+- `save_recommendations`
+- `get_recommendations`
 - `search`
 - `list_leads`
 - `get_lead`
@@ -76,6 +90,10 @@ Send `Authorization: Bearer <key>` (or `x-api-key`, or `?key=`).
 
 | Method | Path | What it does |
 | --- | --- | --- |
+| GET | `/api/v1/brief` | What to do and what's waiting |
+| GET / POST | `/api/v1/research` | Leads waiting for research; save research for one |
+| GET | `/api/v1/batches` (`?name=`) | Batch results |
+| GET / POST | `/api/v1/insights` | Read or write recommendations |
 | GET | `/api/v1/search?q=decagon` | Matching people and companies with full history |
 | GET / POST | `/api/v1/leads` | List with filters, or add one lead, an array, or `{ leads: [...] }` |
 | GET / PATCH / DELETE | `/api/v1/leads/:id` | Full record; update fields; soft delete |

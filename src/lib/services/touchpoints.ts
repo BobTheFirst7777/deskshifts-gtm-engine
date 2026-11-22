@@ -1,10 +1,11 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { CHANNELS, REPLY_LABELS, STAGE_RANK, TOUCH_KINDS, type Stage } from "@/lib/constants";
 import { isHuman, defaultHuman } from "@/lib/actors";
 import { record } from "./activity";
 import { cancelPendingActions, getLead, NotFound } from "./leads";
+import { createOutreachTask } from "./queue";
 
 export const touchpointInput = z.object({
   leadId: z.string().uuid(),
@@ -69,6 +70,7 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
       subject: input.subject ?? null,
       content: input.content ?? null,
       replyLabel: input.direction === "in" ? (input.replyLabel ?? null) : null,
+      batch: actionRow?.batch ?? null,
       variantId,
       occurredAt: input.occurredAt ?? new Date(),
       createdBy: actor,
@@ -78,6 +80,10 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
   const verb =
     input.kind === "note"
       ? "Note"
+      : input.kind === "connection_accepted"
+        ? "Accepted the LinkedIn connection"
+        : input.kind === "connection_request"
+          ? "Sent LinkedIn connection request"
       : input.direction === "out"
         ? `Sent ${input.kind.replace("_", " ")} via ${input.channel}`
         : `Reply via ${input.channel}${input.replyLabel ? ` (${input.replyLabel})` : ""}`;
@@ -92,6 +98,59 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
 
   if (input.kind === "note") return { touchpoint: tp };
 
+  // ---- LinkedIn connection steps
+  if (input.kind === "connection_accepted") {
+    await db.update(schema.leads).set({ linkedinStatus: "connected", updatedAt: new Date() }).where(eq(schema.leads.id, lead.id));
+    await record({
+      actor,
+      entityType: "lead",
+      entityId: lead.id,
+      action: "update",
+      summary: `${lead.fullName} is now connected on LinkedIn`,
+      before: { linkedinStatus: lead.linkedinStatus },
+      after: { linkedinStatus: "connected" },
+    });
+    const [open] = await db
+      .select({ id: schema.actions.id })
+      .from(schema.actions)
+      .where(and(eq(schema.actions.leadId, lead.id), eq(schema.actions.status, "pending"), inArray(schema.actions.type, ["send_first", "follow_up", "respond"])))
+      .limit(1);
+    const [messaged] = await db
+      .select({ id: schema.touchpoints.id })
+      .from(schema.touchpoints)
+      .where(and(eq(schema.touchpoints.leadId, lead.id), eq(schema.touchpoints.direction, "out"), eq(schema.touchpoints.kind, "message"), isNull(schema.touchpoints.deletedAt)))
+      .limit(1);
+    let queued = null;
+    if (!open && !messaged && !lead.paused && !["won", "lost"].includes(lead.stage)) {
+      const fresh = (await getLead(lead.id))!;
+      queued = await createOutreachTask(fresh, "send_first", "linkedin");
+    }
+    return { touchpoint: tp, queued };
+  }
+
+  if (input.kind === "connection_request") {
+    if (!actionRow) {
+      [actionRow] = await db
+        .select()
+        .from(schema.actions)
+        .where(and(eq(schema.actions.leadId, lead.id), eq(schema.actions.status, "pending"), eq(schema.actions.type, "connect")))
+        .orderBy(asc(schema.actions.dueAt))
+        .limit(1);
+      if (actionRow?.batch) await db.update(schema.touchpoints).set({ batch: actionRow.batch }).where(eq(schema.touchpoints.id, tp.id));
+    }
+    if (actionRow && actionRow.status === "pending") {
+      await db
+        .update(schema.actions)
+        .set({ status: "done", completedAt: new Date(), completedBy: actor, updatedAt: new Date() })
+        .where(eq(schema.actions.id, actionRow.id));
+      await record({ actor, entityType: "action", entityId: actionRow.id, action: "complete", summary: `Done: connection request to ${lead.fullName}` });
+    }
+    if (lead.linkedinStatus !== "connected") {
+      await db.update(schema.leads).set({ linkedinStatus: "pending", lastTouchAt: tp.occurredAt, updatedAt: new Date() }).where(eq(schema.leads.id, lead.id));
+    }
+    return { touchpoint: tp };
+  }
+
   await db
     .update(schema.leads)
     .set({ lastTouchAt: tp.occurredAt, updatedAt: new Date() })
@@ -99,7 +158,7 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
 
   if (input.direction === "out") {
     // Close the action this fulfils: the given one, or the oldest pending outbound one.
-    const outbound = ["send_first", "follow_up", "connect", "call", "respond"];
+    const outbound = ["send_first", "follow_up", "call", "respond"];
     if (!actionRow) {
       [actionRow] = await db
         .select()
@@ -113,6 +172,7 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
         )
         .orderBy(asc(schema.actions.dueAt))
         .limit(1);
+      if (actionRow?.batch) await db.update(schema.touchpoints).set({ batch: actionRow.batch }).where(eq(schema.touchpoints.id, tp.id));
     }
     if (actionRow && actionRow.status === "pending") {
       await db
@@ -126,6 +186,10 @@ export async function logTouchpoint(raw: TouchpointInput, actor: string) {
         action: "complete",
         summary: `Done: ${actionRow.type} for ${lead.fullName}`,
       });
+    }
+    if (input.channel === "linkedin" && input.kind === "message" && lead.linkedinStatus !== "connected") {
+      // Messaging them means we're connected.
+      await db.update(schema.leads).set({ linkedinStatus: "connected" }).where(eq(schema.leads.id, lead.id));
     }
     if (input.kind === "meeting") await advanceStage(lead.id, "meeting", actor, "meeting logged");
     else await advanceStage(lead.id, "contacted", actor, "first outreach");

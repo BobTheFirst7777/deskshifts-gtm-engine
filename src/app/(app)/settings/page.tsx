@@ -28,7 +28,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <Card title="Engine">
           <form action={saveSettings} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Tasks per day" hint="messages + follow-ups"><Input name="dailyTarget" type="number" min={0} defaultValue={s.dailyTarget} /></Field>
+              <Field label="Sends per day" hint="up for review at once"><Input name="dailyTarget" type="number" min={0} defaultValue={s.dailyTarget} /></Field>
               <Field label="Follow up after (days)"><Input name="followUpDays" type="number" min={1} defaultValue={s.followUpDays} /></Field>
               <Field label="Max follow-ups" hint="then nurture"><Input name="maxFollowUps" type="number" min={0} defaultValue={s.maxFollowUps} /></Field>
               <Field label="LinkedIn sends per day"><Input name="linkedinDailyLimit" type="number" min={0} defaultValue={s.linkedinDailyLimit} /></Field>
@@ -43,7 +43,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 ]}
               />
             </Field>
-            <Field label="Who we sell to" hint="used by research and scoring"><Textarea name="icp" defaultValue={s.icp} rows={5} /></Field>
+            <Field label="Who we sell to" hint="every agent reads this"><Textarea name="icp" defaultValue={s.icp} rows={5} /></Field>
+            <Field label="How to find leads" hint="the nightly lead-finding brief"><Textarea name="sourcingBrief" defaultValue={s.sourcingBrief} rows={6} /></Field>
+            <Field label="New leads per night"><Input name="nightlyLeadTarget" type="number" min={0} defaultValue={s.nightlyLeadTarget} /></Field>
             <Field label="What we sell" hint="used in every draft"><Textarea name="pitch" defaultValue={s.pitch} rows={4} /></Field>
             <Button tone="primary">Save</Button>
           </form>
@@ -85,14 +87,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     </div>
                   ) : (
                     <div className="space-y-1.5 text-xs text-zinc-600">
-                      <p>MCP connector URL (Claude: Settings → Connectors → Add custom connector. ChatGPT: Settings → Connectors → Create, with developer mode on):</p>
+                      <p>
+                        Connector URL.{" "}
+                        {name === "chatgpt"
+                          ? "ChatGPT: chatgpt.com/plugins → + → Add custom MCP server → paste this, no authentication."
+                          : "Claude: Settings → Connectors → Add custom connector → paste this."}
+                      </p>
                       <Copy value={`${origin}/api/mcp/${key}`} />
-                      {name === "chatgpt" && (
-                        <>
-                          <p className="pt-1">Or as Custom GPT Actions: import this URL, auth = API key, Bearer:</p>
-                          <Copy value={`${origin}/api/openapi.json`} />
-                        </>
-                      )}
+                      <p className="pt-1">Prompt to use each night (or whenever you want a run):</p>
+                      <pre className="whitespace-pre-wrap rounded-md bg-zinc-100 px-2.5 py-1.5 font-sans text-xs text-zinc-800">{`Using Deskshift GTM: call get_brief, then
+1) find ${s.nightlyLeadTarget} new leads following "howToFindLeads" and add them with add_leads,
+2) research everything in get_research_queue and save each with save_research (drafts included),
+3) check get_batch_results for batches older than 3 days and save_recommendations with what to change.
+Tell me what you added and anything that needs my attention.`}</pre>
                     </div>
                   )}
                 </div>

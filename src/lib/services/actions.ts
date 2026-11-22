@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
-import { ACTION_TYPES, CHANNELS } from "@/lib/constants";
+import { ACTION_TYPES, CHANNELS, CHANNEL_LABEL } from "@/lib/constants";
 import { isHuman } from "@/lib/actors";
 import { record, diff } from "./activity";
 import { assigneeFor, getLead, NotFound } from "./leads";
@@ -55,6 +55,8 @@ export const actionPatch = z
     assignee: z.string(),
     dueAt: z.coerce.date(),
     draft: z.string().nullable(),
+    subject: z.string().nullable(),
+    batch: z.string().nullable(),
     channel: z.enum(CHANNELS).nullable(),
     priority: z.coerce.number().int().min(0).max(100),
     reason: z.string().nullable(),
@@ -175,27 +177,51 @@ export async function pendingCount() {
   return r?.n ?? 0;
 }
 
-/** Approve tasks so Instinct may send them (used in "approve first" mode). */
-export async function approveActions(ids: string[], actor: string, approve = true) {
+export function defaultBatchName(channel: string | null, d = new Date()) {
+  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
+  const ch = channel ? (CHANNEL_LABEL[channel] ?? channel) : "Mixed";
+  return `${day} · ${ch}`;
+}
+
+/**
+ * Approve tasks so Instinct may send them. Each approved task joins a batch
+ * (by default "<date> · <channel>") so results can be compared batch by batch.
+ */
+export async function approveActions(ids: string[], actor: string, approve = true, batchName?: string | null) {
   if (!ids.length) return 0;
   const db = getDb();
-  const rows = await db
-    .update(schema.actions)
-    .set({ approvedAt: approve ? new Date() : null, approvedBy: approve ? actor : null, updatedAt: new Date() })
-    .where(and(inArray(schema.actions.id, ids), eq(schema.actions.status, "pending")))
-    .returning();
-  for (const r of rows) {
+  const current = await db
+    .select()
+    .from(schema.actions)
+    .where(and(inArray(schema.actions.id, ids), eq(schema.actions.status, "pending")));
+  for (const r of current) {
+    const batch = approve ? (batchName?.trim() || r.batch || defaultBatchName(r.channel)) : null;
+    await db
+      .update(schema.actions)
+      .set({ approvedAt: approve ? new Date() : null, approvedBy: approve ? actor : null, batch, updatedAt: new Date() })
+      .where(eq(schema.actions.id, r.id));
     await record({
       actor,
       entityType: "action",
       entityId: r.id,
       action: "update",
-      summary: `${approve ? "Approved" : "Unapproved"} ${r.type} for sending`,
-      before: { approvedAt: approve ? null : "set" },
-      after: { approvedAt: approve ? r.approvedAt : null },
+      summary: approve ? `Approved ${r.type} for sending (batch "${batch}")` : `Unapproved ${r.type}`,
+      before: { approvedAt: r.approvedAt, batch: r.batch },
+      after: { approvedAt: approve ? new Date() : null, batch },
     });
   }
-  return rows.length;
+  return current.length;
+}
+
+/** Outbound drafts waiting for a person's approval (the Review & send list). */
+export async function reviewQueue(opts: { channel?: string; assignee?: string } = {}) {
+  const rows = await listQueue({ assignee: opts.assignee ?? "instinct", includeFuture: true, limit: 500 });
+  return rows.filter(
+    (r) =>
+      !r.action.approvedAt &&
+      ["connect", "send_first", "follow_up"].includes(r.action.type) &&
+      (!opts.channel || r.action.channel === opts.channel),
+  );
 }
 
 /** What Instinct should work on now, honouring approve-first mode and the LinkedIn pace limit. */

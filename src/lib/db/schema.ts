@@ -74,6 +74,13 @@ export const leads = pgTable(
     score: integer("score"),
     priority: text("priority"),
     whyRelevant: text("why_relevant"),
+    /** How this company and person relate to Deskshift (agent research). */
+    relation: text("relation"),
+    /** What to target them for: the angle / use case to pitch. */
+    pitchAngle: text("pitch_angle"),
+    /** Extra research columns agents or people add, e.g. { "Support team size": "12" }. */
+    customFields: jsonb("custom_fields").$type<Record<string, string>>().notNull().default({}),
+    researchedBy: text("researched_by"),
     bestChannel: text("best_channel"),
     owner: text("owner").notNull().default("ai"),
     segment: text("segment"),
@@ -81,6 +88,11 @@ export const leads = pgTable(
     notes: text("notes"),
     /** First-message draft written by research; copied onto the first action. */
     draftMessage: text("draft_message"),
+    /** LinkedIn connection request note (max 300 characters). */
+    connectionNote: text("connection_note"),
+    emailSubject: text("email_subject"),
+    /** null = not on LinkedIn / unknown, "pending" = request sent, "connected". */
+    linkedinStatus: text("linkedin_status"),
     variantId: uuid("variant_id").references(() => messageVariants.id),
     handsOff: boolean("hands_off").notNull().default(false),
     paused: boolean("paused").notNull().default(false),
@@ -144,6 +156,7 @@ export const touchpoints = pgTable(
     content: text("content"),
     variantId: uuid("variant_id").references(() => messageVariants.id),
     replyLabel: text("reply_label"),
+    batch: text("batch"),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -170,6 +183,9 @@ export const actions = pgTable(
     status: text("status").notNull().default("pending"),
     dueAt: timestamp("due_at", { withTimezone: true }).notNull().defaultNow(),
     draft: text("draft"),
+    subject: text("subject"),
+    /** Set when approved; groups sends for results, e.g. "Nov 22 · LinkedIn". */
+    batch: text("batch"),
     variantId: uuid("variant_id").references(() => messageVariants.id),
     reason: text("reason"),
     priority: integer("priority").notNull().default(50),

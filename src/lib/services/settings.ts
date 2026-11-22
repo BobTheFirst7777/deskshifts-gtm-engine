@@ -12,6 +12,9 @@ export type Settings = {
   maxFollowUps: number;
   icp: string;
   pitch: string;
+  /** Standing instructions for agents that find leads (nightly or on request). */
+  sourcingBrief: string;
+  nightlyLeadTarget: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -23,6 +26,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxFollowUps: 2,
   icp:
     "B2B SaaS companies (seed to Series C, roughly 10-500 employees), mostly in the US/SF, whose product has a real onboarding, support or product-demo load: complex dashboards, many new users, rising support tickets. Best contacts: founders, CEOs, heads of customer success, support, growth or product.",
+  nightlyLeadTarget: 30,
+  sourcingBrief:
+    "Find people at B2B SaaS companies that match who we sell to. Prefer signals from the last 60 days: new funding, hiring support/CS/onboarding roles, posts about onboarding drop-off, support load or demo bottlenecks, attending SaaS events. Good sources: LinkedIn, Luma event guest lists, Crunchbase/TechCrunch funding news, job boards, company blogs. For each person give their LinkedIn URL, title, company website, and why they fit, with links. Skip anyone already in the engine, agencies, and companies under 5 people.",
   pitch:
     "Deskshift builds Dex, a voice-first AI employee that lives inside a SaaS product and handles onboarding, live how-to help, support ticket routing and product demos for every user.",
 };

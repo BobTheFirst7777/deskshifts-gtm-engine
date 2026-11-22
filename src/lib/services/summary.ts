@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { ACTION_LABEL, CHANNEL_LABEL, REPLY_LABEL_TEXT } from "@/lib/constants";
 import { listQueue, recentlyCompleted } from "./actions";
@@ -13,7 +13,7 @@ export async function dailySummary() {
     .select({ tp: schema.touchpoints, lead: schema.leads })
     .from(schema.touchpoints)
     .innerJoin(schema.leads, eq(schema.touchpoints.leadId, schema.leads.id))
-    .where(and(eq(schema.touchpoints.direction, "in"), gte(schema.touchpoints.occurredAt, since), isNull(schema.touchpoints.deletedAt)))
+    .where(and(eq(schema.touchpoints.direction, "in"), ne(schema.touchpoints.kind, "connection_accepted"), gte(schema.touchpoints.occurredAt, since), isNull(schema.touchpoints.deletedAt)))
     .orderBy(desc(schema.touchpoints.occurredAt));
   const added = await db
     .select({ n: schema.leads.id })

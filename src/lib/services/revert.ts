@@ -50,7 +50,7 @@ export async function revertActivity(activityId: string, actor: string) {
       await setActionStatus(a.entityId, "cancelled", actor, "undone");
       break;
     case "action:update":
-      if ("approvedAt" in before) await approveActions([a.entityId], actor, before.approvedAt !== null);
+      if ("approvedAt" in before) await approveActions([a.entityId], actor, before.approvedAt !== null, (before.batch as string) ?? null);
       else if ("status" in before) await setActionStatus(a.entityId, before.status as "pending", actor, "undone");
       else await updateAction(a.entityId, before, actor);
       break;

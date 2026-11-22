@@ -19,7 +19,8 @@ export default async function AgentLayout({
   const base = `/agent/${key}`;
   const links = [
     ["Rules", base],
-    ["Today", `${base}/today`],
+    ["Research", `${base}/research`],
+    ["Send (approved)", `${base}/today`],
     ["Log replies & updates", `${base}/log`],
     ["Add leads", `${base}/add`],
     ["Look up a lead", `${base}/lead`],

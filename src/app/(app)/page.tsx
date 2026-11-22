@@ -1,16 +1,17 @@
 import Link from "next/link";
-import { and, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, ne } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { humanNames } from "@/lib/actors";
-import { listQueue } from "@/lib/services/actions";
+import { listQueue, reviewQueue } from "@/lib/services/actions";
+import { researchQueue } from "@/lib/services/research";
 import { overview } from "@/lib/services/stats";
 import { getSettings } from "@/lib/services/settings";
 import { aiEnabled } from "@/lib/ai";
 import { CHANNEL_LABEL, REPLY_LABEL_TEXT, STAGES, STAGE_LABEL } from "@/lib/constants";
 import { TaskRow } from "@/components/task-row";
-import { Badge, Button, Card, Empty, Flash, Kpi, PageHeader, pct, timeAgo } from "@/components/ui";
-import { approveAllInstinct, runJob } from "./actions";
+import { Button, Card, Empty, Flash, Kpi, PageHeader, pct, timeAgo } from "@/components/ui";
+import { runJob } from "./actions";
 
 export const metadata = { title: "Today" };
 
@@ -18,19 +19,18 @@ export default async function Today({ searchParams }: { searchParams: Promise<{ 
   const sp = await searchParams;
   const user = await requireUser();
   const db = getDb();
-  const [queue, ov, settings] = await Promise.all([listQueue(), overview(), getSettings()]);
+  const [queue, ov, settings, toReview, toResearch] = await Promise.all([listQueue(), overview(), getSettings(), reviewQueue(), researchQueue(200)]);
 
   const people = humanNames();
   const mine = queue.filter((q) => q.action.assignee === user);
   const teammates = queue.filter((q) => people.includes(q.action.assignee) && q.action.assignee !== user);
   const instinct = queue.filter((q) => q.action.assignee === "instinct");
-  const unapproved = instinct.filter((q) => !q.action.approvedAt).length;
 
   const replies = await db
     .select({ tp: schema.touchpoints, lead: schema.leads })
     .from(schema.touchpoints)
     .innerJoin(schema.leads, eq(schema.touchpoints.leadId, schema.leads.id))
-    .where(and(eq(schema.touchpoints.direction, "in"), isNull(schema.touchpoints.deletedAt), gte(schema.touchpoints.occurredAt, new Date(Date.now() - 7 * 86400_000))))
+    .where(and(eq(schema.touchpoints.direction, "in"), ne(schema.touchpoints.kind, "connection_accepted"), isNull(schema.touchpoints.deletedAt), gte(schema.touchpoints.occurredAt, new Date(Date.now() - 7 * 86400_000))))
     .orderBy(desc(schema.touchpoints.occurredAt))
     .limit(8);
 
@@ -77,32 +77,28 @@ export default async function Today({ searchParams }: { searchParams: Promise<{ 
             )}
           </Card>
 
-          <Card
-            title={`Instinct's queue (${instinct.length})`}
-            padded={false}
-            actions={
-              settings.instinctMode === "approve" && unapproved > 0 ? (
-                <form action={approveAllInstinct}>
-                  <Button size="sm" tone="accent">Approve all {unapproved}</Button>
-                </form>
-              ) : (
-                <Badge tone={settings.instinctMode === "approve" ? "amber" : "green"}>
-                  {settings.instinctMode === "approve" ? "Approve first" : "Auto-send"}
-                </Badge>
-              )
-            }
-          >
-            {settings.instinctMode === "approve" && instinct.length > 0 && (
-              <p className="border-b border-zinc-100 px-4 py-2 text-xs text-zinc-500">
-                Instinct only sees tasks you approve. Open a draft to edit it first.
-              </p>
-            )}
-            {instinct.length ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Link href="/review" className="rounded-xl border border-zinc-200 bg-white px-4 py-3 hover:border-zinc-300">
+              <p className="text-xs font-medium text-zinc-500">Waiting for your approval</p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">{toReview.length}</p>
+              <p className="mt-0.5 text-xs text-accent-600">Review &amp; send →</p>
+            </Link>
+            <Link href="/leads?stage=new" className="rounded-xl border border-zinc-200 bg-white px-4 py-3 hover:border-zinc-300">
+              <p className="text-xs font-medium text-zinc-500">New leads waiting for research</p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">{toResearch.length}</p>
+              <p className="mt-0.5 text-xs text-zinc-500">ChatGPT and Instinct pick these up</p>
+            </Link>
+          </div>
+
+          <Card title={`Approved, waiting for Instinct to send (${instinct.filter((q) => q.action.approvedAt || settings.instinctMode === "auto").length})`} padded={false}>
+            {instinct.filter((q) => q.action.approvedAt || settings.instinctMode === "auto").length ? (
               <ul className="divide-y divide-zinc-100">
-                {instinct.map((q) => <TaskRow key={q.action.id} {...q} showApproval={settings.instinctMode === "approve"} />)}
+                {instinct
+                  .filter((q) => q.action.approvedAt || settings.instinctMode === "auto")
+                  .map((q) => <TaskRow key={q.action.id} {...q} showApproval={settings.instinctMode === "approve"} />)}
               </ul>
             ) : (
-              <Empty>Nothing queued. The queue builds every morning, or press “Build today&apos;s queue now”.</Empty>
+              <Empty>Nothing approved and unsent. Approve messages on Review &amp; send.</Empty>
             )}
           </Card>
 

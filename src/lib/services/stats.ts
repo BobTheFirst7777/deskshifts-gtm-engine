@@ -32,7 +32,7 @@ export async function overview() {
         and(
           eq(schema.touchpoints.direction, dir),
           isNull(schema.touchpoints.deletedAt),
-          sql`${schema.touchpoints.kind} <> 'note'`,
+          sql`${schema.touchpoints.kind} not in ('note', 'connection_request', 'connection_accepted')`,
           gte(schema.touchpoints.occurredAt, since),
         ),
       );
@@ -44,13 +44,13 @@ export async function overview() {
     with firsts as (
       select lead_id, min(occurred_at) as first_out
       from touchpoints
-      where direction = 'out' and kind <> 'note' and deleted_at is null
+      where direction = 'out' and kind not in ('note', 'connection_request', 'connection_accepted') and deleted_at is null
       group by lead_id
       having min(occurred_at) >= ${days(30).toISOString()}
     )
     select count(*)::int as contacted,
       count(*) filter (where exists (
-        select 1 from touchpoints t where t.lead_id = firsts.lead_id and t.direction = 'in'
+        select 1 from touchpoints t where t.lead_id = firsts.lead_id and t.direction = 'in' and t.kind <> 'connection_accepted'
           and t.deleted_at is null and t.occurred_at >= firsts.first_out))::int as replied
     from firsts`);
   const rrRow = rows<{ contacted: number; replied: number }>(rr)[0] ?? { contacted: 0, replied: 0 };
@@ -90,13 +90,13 @@ export async function replyBreakdown(by: "variant" | "channel" | "tier" | "segme
     with firsts as (
       select distinct on (lead_id) lead_id, occurred_at, channel, variant_id
       from touchpoints
-      where direction = 'out' and kind <> 'note' and deleted_at is null
+      where direction = 'out' and kind not in ('note', 'connection_request', 'connection_accepted') and deleted_at is null
       order by lead_id, occurred_at asc
     )
     select ${keyExpr} as key, ${labelExpr} as label,
       count(*)::int as contacted,
       count(*) filter (where exists (
-        select 1 from touchpoints t where t.lead_id = f.lead_id and t.direction = 'in'
+        select 1 from touchpoints t where t.lead_id = f.lead_id and t.direction = 'in' and t.kind <> 'connection_accepted'
           and t.deleted_at is null and t.occurred_at >= f.occurred_at))::int as replied
     from firsts f
     join leads l on l.id = f.lead_id
