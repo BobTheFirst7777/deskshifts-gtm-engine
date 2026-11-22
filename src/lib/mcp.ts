@@ -1,0 +1,289 @@
+import { createMcpHandler } from "mcp-handler";
+import { z } from "zod";
+import { CHANNELS, REPLY_LABELS, STAGES, TIERS, PRIORITIES, SIGNAL_TYPES } from "@/lib/constants";
+import { addSignals, getLeadDetail, leadInput, listLeads, searchEverything, updateLead } from "@/lib/services/leads";
+import { listQueue, setActionStatus, updateAction, createAction } from "@/lib/services/actions";
+import { dailySummary } from "@/lib/services/summary";
+import { overview, replyBreakdown } from "@/lib/services/stats";
+import { createVariant, listVariants } from "@/lib/services/variants";
+import { addLeads, leadRefInput, logForLead } from "@/lib/ops";
+import { JOBS } from "@/lib/jobs";
+
+const INSTRUCTIONS = `This is Deskshift's outbound engine: one shared record of every lead, message and reply.
+- Before writing to someone, call search or get_lead to see their full history.
+- When you find good prospects, call add_leads (duplicates merge automatically; include whyRelevant and any signals with URLs).
+- After you send a message or see a reply, call log_touchpoint. Replies stop automatic follow-ups.
+- Fields the team edited by hand are protected; update_lead reports them as skipped. Don't fight that.
+- Leads marked handsOff are handled personally by the team: don't message them.`;
+
+function ok(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function fail(e: unknown) {
+  const msg =
+    e instanceof z.ZodError ? e.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : e instanceof Error ? e.message : String(e);
+  return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
+}
+
+const wrap =
+  <A,>(fn: (args: A) => Promise<unknown>) =>
+  async (args: A) => {
+    try {
+      return ok(await fn(args));
+    } catch (e) {
+      return fail(e);
+    }
+  };
+
+/** Build an MCP handler that acts as the given agent. */
+export function mcpHandlerFor(actor: string) {
+  return createMcpHandler(
+    (server) => {
+      server.registerTool(
+        "search",
+        {
+          title: "Search leads and companies",
+          description: "Find people or companies by name, domain, email or LinkedIn and return their full history: signals, every message and reply, and open tasks.",
+          inputSchema: z.object({ q: z.string().describe("e.g. 'decagon' or 'priya'") }),
+        },
+        wrap(async ({ q }: { q: string }) => searchEverything(q, 8)),
+      );
+
+      server.registerTool(
+        "list_leads",
+        {
+          title: "List leads",
+          description: "List leads with filters. Sort by score to see the best ones.",
+          inputSchema: z.object({
+            q: z.string().optional(),
+            stage: z.enum(STAGES).optional(),
+            tier: z.enum(TIERS).optional(),
+            source: z.string().optional(),
+            sort: z.enum(["recent", "score", "touched"]).optional(),
+            limit: z.number().int().max(200).optional(),
+          }),
+        },
+        wrap(async (f: { q?: string; stage?: string; tier?: string; source?: string; sort?: "score" | "recent" | "touched"; limit?: number }) => {
+          const rows = await listLeads({ ...f, limit: f.limit ?? 50 });
+          return rows.map((r) => ({
+            id: r.lead.id,
+            name: r.lead.fullName,
+            title: r.lead.title,
+            company: r.company?.name ?? null,
+            stage: r.lead.stage,
+            tier: r.lead.tier,
+            score: r.lead.score,
+            source: r.lead.source,
+            bestChannel: r.lead.bestChannel,
+            handsOff: r.lead.handsOff,
+            lastTouchAt: r.lead.lastTouchAt,
+            linkedinUrl: r.lead.linkedinUrl,
+            email: r.lead.email,
+          }));
+        }),
+      );
+
+      server.registerTool(
+        "get_lead",
+        {
+          title: "Get a lead",
+          description: "Full record for one lead: company, signals, timeline of messages and replies, tasks.",
+          inputSchema: z.object({ id: z.string() }),
+        },
+        wrap(async ({ id }: { id: string }) => (await getLeadDetail(id)) ?? { error: "not found" }),
+      );
+
+      server.registerTool(
+        "add_leads",
+        {
+          title: "Add leads",
+          description:
+            "Add prospects you found (from Apollo, LinkedIn, events, the web). Duplicates are merged, never doubled. Always include whyRelevant and any signals with source URLs.",
+          inputSchema: z.object({ leads: z.array(leadInput).min(1).max(100) }),
+        },
+        wrap(async ({ leads }: { leads: unknown[] }) => addLeads(leads, actor)),
+      );
+
+      server.registerTool(
+        "update_lead",
+        {
+          title: "Update a lead",
+          description: "Change fields on a lead. Fields the team set by hand are protected and come back as skipped.",
+          inputSchema: z.object({
+            id: z.string(),
+            fields: z.object({
+              stage: z.enum(STAGES).optional(),
+              tier: z.enum(TIERS).optional(),
+              score: z.number().int().min(0).max(100).optional(),
+              priority: z.enum(PRIORITIES).optional(),
+              whyRelevant: z.string().optional(),
+              bestChannel: z.enum(CHANNELS).optional(),
+              title: z.string().optional(),
+              email: z.string().optional(),
+              phone: z.string().optional(),
+              linkedinUrl: z.string().optional(),
+              segment: z.string().optional(),
+              notes: z.string().optional(),
+            }),
+          }),
+        },
+        wrap(async ({ id, fields }: { id: string; fields: Record<string, unknown> }) => updateLead(id, fields, actor)),
+      );
+
+      server.registerTool(
+        "add_signals",
+        {
+          title: "Add signals",
+          description: "Attach buying signals you found (funding, a post about support pain, hiring, an event) with source URLs.",
+          inputSchema: z.object({
+            leadId: z.string(),
+            signals: z.array(z.object({ type: z.enum(SIGNAL_TYPES), summary: z.string(), url: z.string().optional() })),
+          }),
+        },
+        wrap(async ({ leadId, signals }: { leadId: string; signals: { type: string; summary: string; url?: string }[] }) => addSignals(leadId, signals as never, actor)),
+      );
+
+      server.registerTool(
+        "log_touchpoint",
+        {
+          title: "Log a message, reply, call, meeting or note",
+          description:
+            "Record outreach. direction 'out' = we sent it; 'in' = they replied. Pass leadId, or lead {linkedinUrl|email|name}. Replies stop automatic follow-ups and alert the team.",
+          inputSchema: z.object({
+            leadId: z.string().optional(),
+            lead: leadRefInput.optional(),
+            channel: z.enum(CHANNELS),
+            direction: z.enum(["out", "in"]),
+            kind: z.enum(["message", "connection_request", "call", "meeting", "note"]).optional(),
+            content: z.string().optional().describe("Exact text sent or received"),
+            replyLabel: z.enum(REPLY_LABELS).optional(),
+            actionId: z.string().optional().describe("The task this fulfils, if any"),
+          }),
+        },
+        wrap(async (args: Record<string, unknown>) => logForLead(args, actor)),
+      );
+
+      server.registerTool(
+        "get_today_queue",
+        {
+          title: "Today's tasks",
+          description: "Today's outreach tasks with drafts, highest priority first. Filter by assignee (instinct, ishan, tanzil).",
+          inputSchema: z.object({ assignee: z.string().optional() }),
+        },
+        wrap(async ({ assignee }: { assignee?: string }) =>
+          (await listQueue({ assignee })).map((r) => ({
+            taskId: r.action.id,
+            type: r.action.type,
+            channel: r.action.channel,
+            assignee: r.action.assignee,
+            priority: r.action.priority,
+            draft: r.action.draft,
+            reason: r.action.reason,
+            lead: {
+              id: r.lead.id,
+              name: r.lead.fullName,
+              title: r.lead.title,
+              company: r.company?.name ?? null,
+              linkedinUrl: r.lead.linkedinUrl,
+              email: r.lead.email,
+              whyRelevant: r.lead.whyRelevant,
+            },
+          })),
+        ),
+      );
+
+      server.registerTool(
+        "update_task",
+        {
+          title: "Update a task",
+          description: "Mark a task done or skipped, or improve its draft.",
+          inputSchema: z.object({
+            taskId: z.string(),
+            status: z.enum(["done", "skipped", "pending"]).optional(),
+            note: z.string().optional(),
+            draft: z.string().optional(),
+          }),
+        },
+        wrap(async ({ taskId, status, note, draft }: { taskId: string; status?: "done" | "skipped" | "pending"; note?: string; draft?: string }) => {
+          if (draft !== undefined) await updateAction(taskId, { draft }, actor);
+          if (status) return setActionStatus(taskId, status, actor, note);
+          return { ok: true };
+        }),
+      );
+
+      server.registerTool(
+        "create_task",
+        {
+          title: "Create a task",
+          description: "Schedule a task for a lead (e.g. a call, or a follow-up on a date).",
+          inputSchema: z.object({
+            leadId: z.string(),
+            type: z.enum(["send_first", "follow_up", "respond", "connect", "call", "research", "custom"]),
+            channel: z.enum(CHANNELS).optional(),
+            assignee: z.string().optional(),
+            dueAt: z.string().optional().describe("ISO date"),
+            draft: z.string().optional(),
+            reason: z.string().optional(),
+          }),
+        },
+        wrap(async (args: Record<string, unknown>) => createAction(args as never, actor)),
+      );
+
+      server.registerTool(
+        "daily_summary",
+        { title: "Daily summary", description: "What happened in the last 24 hours and what's on today.", inputSchema: z.object({}) },
+        wrap(async () => dailySummary()),
+      );
+
+      server.registerTool(
+        "get_stats",
+        {
+          title: "Outreach stats",
+          description: "Reply rates by message version, channel, segment, tier and source. Use this to decide what to send next.",
+          inputSchema: z.object({}),
+        },
+        wrap(async () => ({
+          overview: await overview(),
+          byVariant: await replyBreakdown("variant"),
+          byChannel: await replyBreakdown("channel"),
+          bySegment: await replyBreakdown("segment"),
+          byTier: await replyBreakdown("tier"),
+        })),
+      );
+
+      server.registerTool(
+        "message_versions",
+        {
+          title: "Message versions",
+          description: "List message versions (for A/B testing), or add a new one by passing name and body.",
+          inputSchema: z.object({
+            name: z.string().optional(),
+            body: z.string().optional(),
+            angle: z.string().optional(),
+            segment: z.string().optional(),
+            channel: z.enum(CHANNELS).optional(),
+          }),
+        },
+        wrap(async (a: { name?: string; body?: string; angle?: string; segment?: string; channel?: (typeof CHANNELS)[number] }) => {
+          if (a.name && a.body) return createVariant({ ...a, name: a.name, body: a.body }, actor);
+          return listVariants();
+        }),
+      );
+
+      server.registerTool(
+        "run_job",
+        {
+          title: "Run a job now",
+          description: "research = research unresearched leads; queue = build today's tasks; weekly = write the weekly review.",
+          inputSchema: z.object({ job: z.enum(["research", "queue", "weekly"]) }),
+        },
+        wrap(async ({ job }: { job: "research" | "queue" | "weekly" }) => JOBS[job]()),
+      );
+    },
+    {
+      serverInfo: { name: "deskshift-gtm", version: "1.0.0" },
+      instructions: INSTRUCTIONS,
+    },
+  );
+}
