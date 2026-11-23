@@ -2,7 +2,9 @@ import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 import { CHANNELS, REPLY_LABELS, STAGES, TIERS, PRIORITIES, SIGNAL_TYPES } from "@/lib/constants";
 import { addSignals, getLeadDetail, leadInput, listLeads, searchEverything, updateLead } from "@/lib/services/leads";
-import { listQueue, setActionStatus, updateAction, createAction } from "@/lib/services/actions";
+import { listQueue, setActionStatus, createAction, reviewQueue, selfSendQueue, writeDraft } from "@/lib/services/actions";
+import { humanNames } from "@/lib/actors";
+import { getSettings } from "@/lib/services/settings";
 import { dailySummary } from "@/lib/services/summary";
 import { overview, replyBreakdown } from "@/lib/services/stats";
 import { createVariant, listVariants } from "@/lib/services/variants";
@@ -16,7 +18,7 @@ const INSTRUCTIONS = `This is Deskshift's outbound engine: one shared record of 
 - Start every session with get_brief: it says what we sell, who to find, the nightly routine, what's waiting, and the latest recommendations.
 - If asked to "run the routine" (or similar), follow get_brief's workflow end to end without asking first.
 - Before writing to someone, call search or get_lead to see their full history.
-- Research new leads from get_research_queue and save it with save_research. Nothing is sent until a person approves it.
+- Research new leads from get_research_queue and save it with save_research. Write messages for tasks in get_review_queue with write_draft. Nothing is sent until a person approves it.
 - When you find good prospects, call add_leads (duplicates merge automatically; include whyRelevant and any signals with URLs).
 - After you send a message or see a reply, call log_touchpoint. Replies stop automatic follow-ups.
 - Fields the team edited by hand are protected; update_lead reports them as skipped. Don't fight that.
@@ -54,7 +56,7 @@ export function mcpHandlerFor(actor: string) {
             "Call this first. What Deskshift sells, who to look for and how, how many leads per night, the step-by-step workflow, what's waiting (to research / to approve), recent batch results and the latest recommendations.",
           inputSchema: z.object({}),
         },
-        wrap(async () => agentBrief()),
+        wrap(async () => agentBrief(actor)),
       );
 
       server.registerTool(
@@ -89,6 +91,74 @@ export function mcpHandlerFor(actor: string) {
           inputSchema: researchInput,
         },
         wrap(async (args: Record<string, unknown>) => saveResearch(args as never, actor)),
+      );
+
+      server.registerTool(
+        "get_review_queue",
+        {
+          title: "Messages waiting for review",
+          description:
+            "Every outreach task waiting for the team's approval (and ones the team sends themselves), with the current draft and the lead's research. Use write_draft to write or improve each message.",
+          inputSchema: z.object({ channel: z.enum(CHANNELS).optional() }),
+        },
+        wrap(async ({ channel }: { channel?: (typeof CHANNELS)[number] }) => {
+          const rows = [...(await reviewQueue({ channel })), ...(await selfSendQueue(humanNames(), { channel }))];
+          const { getLeadDetail } = await import("@/lib/services/leads");
+          const out = [];
+          for (const r of rows) {
+            const d = await getLeadDetail(r.lead.id);
+            out.push({
+              taskId: r.action.id,
+              task: r.action.type === "connect" ? "LinkedIn connection request note (max 300 chars)" : r.action.type === "follow_up" ? "follow-up message" : "first message",
+              channel: r.action.channel,
+              sentBy: r.action.assignee === "instinct" ? "Instinct, after approval" : `${r.action.assignee} (by hand)`,
+              currentDraft: r.action.draft,
+              currentSubject: r.action.subject,
+              draftEditedByTeam: r.action.manualFields.includes("draft"),
+              reason: r.action.reason,
+              lead: {
+                name: r.lead.fullName,
+                title: r.lead.title,
+                company: r.company?.name ?? null,
+                linkedinUrl: r.lead.linkedinUrl,
+                linkedin: r.lead.linkedinStatus ?? "not connected",
+                relation: r.lead.relation,
+                whyNow: r.lead.whyRelevant,
+                pitch: r.lead.pitchAngle,
+                segment: r.lead.segment,
+                extra: r.lead.customFields,
+                signals: d?.signals.map((s) => ({ summary: s.summary, url: s.url })) ?? [],
+                connectionNoteSent: d?.touchpoints.find((t) => t.kind === "connection_request")?.content ?? null,
+                conversation: d?.touchpoints
+                  .filter((t) => t.kind !== "note")
+                  .slice(0, 6)
+                  .map((t) => ({ from: t.direction === "out" ? "us" : "them", kind: t.kind, text: t.content, at: t.occurredAt })),
+              },
+            });
+          }
+          return out;
+        }),
+      );
+
+      server.registerTool(
+        "write_draft",
+        {
+          title: "Write a message for a task",
+          description:
+            "Write or replace the draft for a task from get_review_queue. Connection notes must be 300 characters or fewer. Approved tasks can't be changed, and drafts the team edited are kept.",
+          inputSchema: z.object({
+            taskId: z.string(),
+            draft: z.string().min(1),
+            subject: z.string().optional().describe("Email subject, for email tasks"),
+          }),
+        },
+        wrap(async ({ taskId, draft, subject }: { taskId: string; draft: string; subject?: string }) => {
+          const s = await getSettings();
+          if (s.draftWriter === "chatgpt" && actor !== "chatgpt") {
+            throw new Error("The team has set ChatGPT to write all messages. Leave drafts to ChatGPT.");
+          }
+          return writeDraft(taskId, { draft, subject }, actor);
+        }),
       );
 
       server.registerTool(
@@ -205,6 +275,11 @@ export function mcpHandlerFor(actor: string) {
               linkedinUrl: z.string().optional(),
               segment: z.string().optional(),
               notes: z.string().optional(),
+              relation: z.string().optional(),
+              pitchAngle: z.string().optional(),
+              connectionNote: z.string().max(300).optional().describe("Used for the next connection request"),
+              draftMessage: z.string().optional().describe("Used for the first message after they accept"),
+              emailSubject: z.string().optional(),
             }),
           }),
         },
@@ -289,7 +364,7 @@ export function mcpHandlerFor(actor: string) {
           }),
         },
         wrap(async ({ taskId, status, note, draft }: { taskId: string; status?: "done" | "skipped" | "pending"; note?: string; draft?: string }) => {
-          if (draft !== undefined) await updateAction(taskId, { draft }, actor);
+          if (draft !== undefined) await writeDraft(taskId, { draft }, actor);
           if (status) return setActionStatus(taskId, status, actor, note);
           return { ok: true };
         }),

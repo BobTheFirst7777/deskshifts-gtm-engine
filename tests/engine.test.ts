@@ -228,6 +228,7 @@ import { addLeads } from "@/lib/ops";
 
 describe("agent research and the LinkedIn sequence", () => {
   it("runs research → connection request → accepted → message → reply, tracked by batch", async () => {
+    await updateSettings({ draftWriter: "any" }, "ishan"); // let the researching agent write drafts here
     const { lead } = await addLead({ fullName: "Nina Park", company: "Cartwheel", linkedinUrl: "linkedin.com/in/ninapark" }, "chatgpt");
     expect((await researchQueue()).some((r) => r.lead.id === lead.id)).toBe(true);
 
@@ -289,6 +290,7 @@ describe("agent research and the LinkedIn sequence", () => {
     await saveRecommendation({ title: "Test batch learnings", body: "Onboarding angle worked.", batch: "Test batch" }, "chatgpt");
     const brief = await agentBrief();
     expect(brief.latestRecommendations[0].title).toBe("Test batch learnings");
+    await updateSettings({ draftWriter: "chatgpt" }, "ishan");
   });
 
   it("protects custom columns a person edited, but lets agents add new ones", async () => {
@@ -357,5 +359,34 @@ describe("agent research and the LinkedIn sequence", () => {
     expect(emailTask.channel).toBe("email");
     expect(emailTask.reason).toContain("not accepted");
     expect((await getLeadDetail(noEmail.lead.id))!.lead.stage).toBe("nurture");
+  });
+});
+
+describe("ChatGPT writes the messages", () => {
+  it("drops drafts from other agents, lets ChatGPT write them, keeps team edits, and locks approved tasks", async () => {
+    const { lead } = await addLead({ fullName: "Ana Silva", company: "Hoop", linkedinUrl: "linkedin.com/in/anasilva" }, "chatgpt");
+    const r = await saveResearch(
+      { leadId: lead.id, relation: "r", whyRelevant: "w", pitchAngle: "p", importance: 70, bestChannel: "linkedin", connectionNote: "Instinct's note", draftMessage: "Instinct's message" },
+      "instinct",
+    );
+    const taskId = r.queued!.taskId;
+    let d = (await getLeadDetail(lead.id))!;
+    expect(d.lead.connectionNote).toBeNull();
+    expect(d.actions.find((a) => a.id === taskId)!.draft).toBeNull();
+
+    const { writeDraft } = await import("@/lib/services/actions");
+    await expect(writeDraft(taskId, { draft: "x".repeat(301) }, "chatgpt")).rejects.toThrow(/300/);
+    const w = await writeDraft(taskId, { draft: "Hi Ana, loved your talk on Hoop's onboarding. Would love to connect." }, "chatgpt");
+    expect(w.written).toBe(true);
+
+    const { updateAction } = await import("@/lib/services/actions");
+    await updateAction(taskId, { draft: "Ishan's own note" }, "ishan");
+    const again = await writeDraft(taskId, { draft: "ChatGPT tries again" }, "chatgpt");
+    expect(again.written).toBe(false);
+
+    await approveActions([taskId], "ishan");
+    await expect(writeDraft(taskId, { draft: "late change" }, "chatgpt")).rejects.toThrow(/approved/);
+    d = (await getLeadDetail(lead.id))!;
+    expect(d.actions.find((a) => a.id === taskId)!.draft).toBe("Ishan's own note");
   });
 });

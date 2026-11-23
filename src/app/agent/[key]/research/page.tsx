@@ -1,4 +1,5 @@
 import { researchQueue } from "@/lib/services/research";
+import { getSettings } from "@/lib/services/settings";
 import { CHANNELS, CHANNEL_LABEL } from "@/lib/constants";
 import { Flash, H1, Submit } from "../../ui";
 import { saveResearchAgent } from "../actions";
@@ -15,6 +16,8 @@ export default async function Research({
   const { key } = await params;
   const sp = await searchParams;
   const rows = await researchQueue(15);
+  const { draftWriter } = await getSettings();
+  const writes = draftWriter === "any";
   return (
     <main>
       <Flash msg={sp.msg} err={sp.err} />
@@ -67,6 +70,8 @@ export default async function Research({
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="linkedinConnected" /> We&apos;re already connected on LinkedIn
               </label>
+              {writes ? (
+                <>
               <label className="block font-medium">LinkedIn connection note (under 300 characters)
                 <textarea name="connectionNote" rows={2} maxLength={300} className={box} />
               </label>
@@ -76,6 +81,10 @@ export default async function Research({
               <label className="block font-medium">Email subject (if email)
                 <input name="emailSubject" className={box} />
               </label>
+                </>
+              ) : (
+                <p className="rounded border border-zinc-300 bg-zinc-50 p-2 text-sm">Don&apos;t write messages: ChatGPT writes every note and message from your research.</p>
+              )}
               <label className="block font-medium">Their email, if you found it
                 <input name="email" defaultValue={l.email ?? ""} className={box} />
               </label>

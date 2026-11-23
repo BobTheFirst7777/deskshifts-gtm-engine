@@ -21,6 +21,7 @@ One shared record of every lead, message and reply for Deskshift, with four ways
    - signals with links
    - any extra columns they want
    - the drafts: a LinkedIn connection note under 300 characters, the first message, and an email subject
+2b. **Messages.** By default ChatGPT writes every note and message (Settings → Who writes the messages). Instinct researches but leaves drafts empty. ChatGPT reads `get_review_queue` and writes each draft with `write_draft`. Your own edits are kept, and approved tasks are locked.
 3. **Next step is queued.** For LinkedIn leads that's a **connection request**; once the connection is accepted, the **first message**. Email leads go straight to the message. Each step goes to **Review & send**.
 4. **You approve** on Review & send: scroll, edit inline, then approve some or all. Approved sends become a **batch**, by default "Nov 22 · LinkedIn", or named by you.
 5. **Sending.** Instinct sends only approved tasks (its **Send** page) and logs each one, plus accepted connections and replies. For leads you mark **I'll handle this one** (only people can), the same drafts show under **You send** on Review & send. The app can't send on LinkedIn for you, so you send from your own account and press **I sent it**, which records it on the timeline and in the batch. A reply stops follow-ups and creates a "Respond" task for you.
@@ -73,6 +74,8 @@ MCP tools:
 - `get_brief`
 - `get_research_queue`
 - `save_research`
+- `get_review_queue`
+- `write_draft`
 - `get_batch_results`
 - `save_recommendations`
 - `get_recommendations`

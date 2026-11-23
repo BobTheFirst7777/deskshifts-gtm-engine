@@ -256,3 +256,21 @@ export async function selfSendQueue(people: string[], opts: { channel?: string }
       (!opts.channel || r.action.channel === opts.channel),
   );
 }
+
+/**
+ * An agent writes or rewrites the message for a task waiting for review.
+ * Refused once a task is approved (it may be on its way out). A draft a person
+ * edited is kept; the agent's version is not applied.
+ */
+export async function writeDraft(taskId: string, input: { draft: string; subject?: string | null }, actor: string) {
+  const db = getDb();
+  const [a] = await db.select().from(schema.actions).where(eq(schema.actions.id, taskId));
+  if (!a) throw new NotFound("Task not found");
+  if (a.status !== "pending") throw new Error("This task is closed");
+  if (a.approvedAt) throw new Error("Already approved, so it may be sent any moment. Ask the team to unapprove it first if it needs changing.");
+  if (a.type === "connect" && input.draft.length > 300) throw new Error(`Connection notes must be 300 characters or fewer (this one is ${input.draft.length}).`);
+  const patch: Record<string, unknown> = { draft: input.draft };
+  if (input.subject !== undefined) patch.subject = input.subject;
+  const r = await updateAction(taskId, patch, actor);
+  return { taskId, written: !r.skipped.includes("draft"), keptTeamVersion: r.skipped };
+}

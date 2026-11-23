@@ -22,7 +22,7 @@ export default async function AgentRules({ params }: { params: Promise<{ key: st
         </li>
         <li>
           <b>Research them.</b> Open <Link className="text-blue-700 underline" href={`${base}/research`}>Research</Link> and fill in every new
-          lead: how they relate to us, why now, what to pitch, importance, channel, and the drafts. They then wait for the team&apos;s approval.
+          lead: how they relate to us, why now, what to pitch, importance, channel{s.draftWriter === "any" ? ", and the drafts" : ". ChatGPT writes the messages"}. They then wait for the team&apos;s approval.
         </li>
       </ol>
 

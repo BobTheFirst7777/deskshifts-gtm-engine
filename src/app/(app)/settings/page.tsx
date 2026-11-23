@@ -44,6 +44,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 ]}
               />
             </Field>
+            <Field label="Who writes the messages">
+              <Select
+                name="draftWriter"
+                defaultValue={s.draftWriter}
+                options={[
+                  ["chatgpt", "ChatGPT writes every note and message; Instinct only researches and sends"],
+                  ["any", "Whichever agent researches the lead writes its drafts"],
+                ]}
+              />
+            </Field>
             <Field label="Who we sell to" hint="every agent reads this"><Textarea name="icp" defaultValue={s.icp} rows={5} /></Field>
             <Field label="How to find leads" hint="the nightly lead-finding brief"><Textarea name="sourcingBrief" defaultValue={s.sourcingBrief} rows={6} /></Field>
             <Field label="New leads per night"><Input name="nightlyLeadTarget" type="number" min={0} defaultValue={s.nightlyLeadTarget} /></Field>

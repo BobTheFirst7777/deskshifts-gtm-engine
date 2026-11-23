@@ -5,6 +5,8 @@ import { CHANNELS, PRIORITIES, SIGNAL_TYPES, TIERS } from "@/lib/constants";
 import { record } from "./activity";
 import { addSignals, getLead, getLeadDetail, NotFound, updateCompany, updateLead } from "./leads";
 import { queueFirstTouch } from "./queue";
+import { getSettings } from "./settings";
+import { isHuman } from "@/lib/actors";
 
 /** New leads that no agent has researched yet, oldest first. */
 export async function researchQueue(limit = 25) {
@@ -76,7 +78,10 @@ export async function saveResearch(raw: ResearchInput, actor: string) {
     priority: r.priority ?? (r.importance >= 80 ? "high" : r.importance >= 55 ? "medium" : "low"),
     bestChannel: r.bestChannel,
   };
+  const settings = await getSettings();
+  const mayWrite = settings.draftWriter === "any" || actor === "chatgpt" || isHuman(actor);
   for (const k of ["tier", "segment", "connectionNote", "draftMessage", "emailSubject", "title", "email", "linkedinUrl"] as const) {
+    if (!mayWrite && (k === "connectionNote" || k === "draftMessage" || k === "emailSubject")) continue;
     if (r[k]) patch[k] = r[k];
   }
   if (r.customFields && Object.keys(r.customFields).length) patch.customFields = r.customFields;
