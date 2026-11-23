@@ -8,7 +8,7 @@ const eslintConfig = defineConfig([
   {
     // Pages and these components are server components rendered per request,
     // so reading the clock while rendering is intended.
-    files: ["src/app/**/*.tsx", "src/components/task-row.tsx", "src/components/ui.tsx"],
+    files: ["src/app/**/*.tsx", "src/components/task-row.tsx", "src/components/ui.tsx", "src/components/text-instinct.tsx"],
     rules: { "react-hooks/purity": "off" },
   },
   // Override default ignores of eslint-config-next.

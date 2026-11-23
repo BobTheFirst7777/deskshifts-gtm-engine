@@ -6,6 +6,7 @@ import { getSettings } from "@/lib/services/settings";
 import { ACTION_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { Badge, Button, Empty, Flash, Input, PageHeader, ScorePill, TierBadge, cx } from "@/components/ui";
 import { runJob, sentByMe, skipReviewItem, submitReview } from "../actions";
+import { TextInstinct } from "@/components/text-instinct";
 
 export const metadata = { title: "Review & send" };
 
@@ -39,7 +40,7 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="Review & send"
-        subtitle={`Everything waiting to go out. Instinct sends only what you approve; for leads you handle yourself, send from your own LinkedIn or inbox and press “I sent it”.${approvedWaiting.length ? ` ${approvedWaiting.length} approved and waiting for Instinct.` : ""}`}
+        subtitle="Everything waiting to go out. Instinct sends only what you approve; for leads you handle yourself, send from your own LinkedIn or inbox and press “I sent it”."
         actions={
           <form action={runJob}>
             <input type="hidden" name="job" value="queue" />
@@ -48,6 +49,8 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
           </form>
         }
       />
+
+      <div className="mb-4"><TextInstinct waiting={approvedWaiting.length} /></div>
 
       <div className="mb-4 flex items-center gap-1.5">
         {TABS.map(([c, label]) => (

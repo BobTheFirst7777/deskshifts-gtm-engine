@@ -342,6 +342,8 @@ export async function saveSettings(fd: FormData) {
     if (fd.has(k) && s(fd, k)) patch[k] = Math.max(0, Number(s(fd, k)));
   }
   if (fd.has("instinctMode")) patch.instinctMode = s(fd, "instinctMode") === "auto" ? "auto" : "approve";
+  if (fd.has("instinctContact")) patch.instinctContact = s(fd, "instinctContact");
+  if (fd.has("instinctContactVia")) patch.instinctContactVia = s(fd, "instinctContactVia") === "whatsapp" ? "whatsapp" : "imessage";
   if (fd.has("draftWriter")) patch.draftWriter = s(fd, "draftWriter") === "any" ? "any" : "chatgpt";
   await updateSettings(patch, user);
   refresh();

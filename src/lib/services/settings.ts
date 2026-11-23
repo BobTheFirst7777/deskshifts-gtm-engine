@@ -7,6 +7,11 @@ export type Settings = {
   /** approve = Instinct only sends tasks a person approved; auto = it sends everything assigned to it. */
   instinctMode: "approve" | "auto";
   linkedinDailyLimit: number;
+  /** Instinct's phone number or handle, for the "Text Instinct" button. */
+  instinctContact: string;
+  instinctContactVia: "imessage" | "whatsapp";
+  /** Last time Instinct opened its Send page (set automatically). */
+  instinctLastCheckedAt: string | null;
   /** Who writes outreach drafts: "chatgpt" = only ChatGPT; "any" = whichever agent researches. */
   draftWriter: "chatgpt" | "any";
   /** Days to wait for a LinkedIn connection to be accepted before trying email or moving on. */
@@ -27,6 +32,9 @@ export const DEFAULT_SETTINGS: Settings = {
   linkedinDailyLimit: 25,
   connectionGiveUpDays: 14,
   draftWriter: "chatgpt",
+  instinctContact: "",
+  instinctContactVia: "imessage",
+  instinctLastCheckedAt: null,
   dailyTarget: 30,
   followUpDays: 3,
   maxFollowUps: 2,
@@ -75,4 +83,12 @@ export async function updateSettings(patch: Partial<Settings>, actor: string) {
     after: patch as Record<string, unknown>,
   });
   return getSettings();
+}
+
+/** Record a setting the system itself maintains, without an activity entry. */
+export async function touchSetting(key: keyof Settings, value: unknown) {
+  const db = getDb();
+  const existing = await db.select().from(schema.settings).where(eq(schema.settings.key, key));
+  if (existing.length) await db.update(schema.settings).set({ value, updatedAt: new Date() }).where(eq(schema.settings.key, key));
+  else await db.insert(schema.settings).values({ key, value });
 }

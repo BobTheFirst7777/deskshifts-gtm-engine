@@ -12,6 +12,7 @@ import { CHANNEL_LABEL, REPLY_LABEL_TEXT, STAGES, STAGE_LABEL } from "@/lib/cons
 import { TaskRow } from "@/components/task-row";
 import { Button, Card, Empty, Flash, Kpi, PageHeader, pct, timeAgo } from "@/components/ui";
 import { runJob } from "./actions";
+import { TextInstinct } from "@/components/text-instinct";
 
 export const metadata = { title: "Today" };
 
@@ -89,6 +90,8 @@ export default async function Today({ searchParams }: { searchParams: Promise<{ 
               <p className="mt-0.5 text-xs text-zinc-500">ChatGPT and Instinct pick these up</p>
             </Link>
           </div>
+
+          <TextInstinct waiting={instinct.filter((q) => q.action.approvedAt || settings.instinctMode === "auto").length} compact />
 
           <Card title={`Approved, waiting for Instinct to send (${instinct.filter((q) => q.action.approvedAt || settings.instinctMode === "auto").length})`} padded={false}>
             {instinct.filter((q) => q.action.approvedAt || settings.instinctMode === "auto").length ? (

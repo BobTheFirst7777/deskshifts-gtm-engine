@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getSettings } from "@/lib/services/settings";
+import { getSettings, touchSetting } from "@/lib/services/settings";
 import { instinctQueue, listQueue } from "@/lib/services/actions";
 import { ACTION_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { actorForKey } from "@/lib/actors";
@@ -17,6 +17,7 @@ export default async function Today({
   const sp = await searchParams;
   const actor = actorForKey(key)!;
   const s = await getSettings();
+  if (actor === "instinct") await touchSetting("instinctLastCheckedAt", new Date().toISOString());
 
   const { tasks, linkedinSentToday, waitingApproval } =
     actor === "instinct"

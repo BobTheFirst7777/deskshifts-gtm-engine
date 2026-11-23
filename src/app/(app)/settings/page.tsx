@@ -44,6 +44,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 ]}
               />
             </Field>
+            <div id="instinct" className="grid grid-cols-3 gap-3">
+              <Field label="Instinct's number or handle" hint="for “Text Instinct”" className="col-span-2">
+                <Input name="instinctContact" defaultValue={s.instinctContact} placeholder="+1 415 555 0100" />
+              </Field>
+              <Field label="You text it on">
+                <Select name="instinctContactVia" defaultValue={s.instinctContactVia} options={[["imessage", "iMessage / SMS"], ["whatsapp", "WhatsApp"]]} />
+              </Field>
+            </div>
             <Field label="Who writes the messages">
               <Select
                 name="draftWriter"
