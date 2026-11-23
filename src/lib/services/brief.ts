@@ -23,11 +23,12 @@ export async function agentBrief() {
     howToFindLeads: s.sourcingBrief,
     leadsPerNight: s.nightlyLeadTarget,
     workflow: [
-      "1. Find new leads that match who we sell to, following howToFindLeads. Add them with add_leads (duplicates merge automatically). Include LinkedIn URL, title, company website and why they fit.",
-      "2. Research every lead in get_research_queue, then call save_research for each: how they relate to us, why now, what to pitch them on, importance 0-100, best channel, and the drafts (connection note under 300 characters for LinkedIn, first message, email subject if email). Add any extra columns you find useful in customFields.",
-      "3. Nothing is sent until a person approves it on the Review & send page. Instinct sends approved tasks and logs each one with log_touchpoint.",
-      "4. Log every accepted LinkedIn connection (kind connection_accepted) and every reply (direction in). Accepted connections automatically queue the first message for review.",
-      "5. Use get_batch_results to see who replied in each batch, then save_recommendations with what worked, what didn't, and what to change.",
+      "This is the nightly routine. When asked to 'run the routine' (or anything similar), do all of it without asking first.",
+      "1. FIND: find leadsPerNight new people following howToFindLeads. Add them with add_leads using only the basics: name, title, company, website, LinkedIn URL, email if public, and where you found them (sourceDetail). Don't research in this step. Duplicates merge automatically.",
+      "2. RESEARCH: for every lead in get_research_queue (call it repeatedly until empty), research them and call save_research with relation, whyRelevant, pitchAngle, importance 0-100, bestChannel, a LinkedIn connectionNote under 300 characters, the draftMessage to send after they accept (it follows on from the note), emailSubject if email, signals with links, and any useful extra columns in customFields. Apply latestRecommendations when writing drafts.",
+      "3. LEARN: for batches older than 3 days in get_batch_results, call save_recommendations with what worked, what didn't (with numbers) and what to change.",
+      "Never set a lead's stage, hands-off or owner; the team does that. Nothing is sent until a person approves it on Review & send; Instinct (or the person) sends and logs it.",
+      "Finish with a short report: how many added, researched, and anything that needs the team's attention.",
     ],
     latestRecommendations: insights.map((i) => ({ title: i.title, by: i.createdBy, at: i.createdAt, body: i.body.slice(0, 2500) })),
     waiting: {

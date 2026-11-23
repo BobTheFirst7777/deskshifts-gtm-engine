@@ -95,7 +95,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                           : "Claude: Settings → Connectors → Add custom connector → paste this."}
                       </p>
                       <Copy value={`${origin}/api/mcp/${key}`} />
-                      <p className="pt-1">Prompt to use each night (or whenever you want a run):</p>
+                      <p className="pt-1">
+                        Day to day, just say <b>“@Deskshift GTM run the routine”</b>. The full routine is built in. To change it for one run, paste this
+                        and edit it:
+                      </p>
                       <pre className="whitespace-pre-wrap rounded-md bg-zinc-100 px-2.5 py-1.5 font-sans text-xs text-zinc-800">{`Using Deskshift GTM, call get_brief first. Then:
 1) Find ${s.nightlyLeadTarget} new leads following "howToFindLeads". Add them with add_leads: just the basics (name, title, company, website, LinkedIn URL, email if public, where you found them). Don't research them in this step.
 2) For every lead in get_research_queue, research it and call save_research with: relation, whyRelevant, pitchAngle, importance (0-100), bestChannel, a LinkedIn connectionNote under 300 characters, the draftMessage to send after they accept (it should follow on from the note), emailSubject if email, and signals with links.

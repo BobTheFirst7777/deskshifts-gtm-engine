@@ -13,7 +13,8 @@ import { researchInput, researchQueue, saveResearch } from "@/lib/services/resea
 import { batchResultsForAgents, latestInsights, recommendationInput, saveRecommendation } from "@/lib/services/batches";
 
 const INSTRUCTIONS = `This is Deskshift's outbound engine: one shared record of every lead, message and reply.
-- Start every session with get_brief: it says what we sell, who to find, the workflow, what's waiting, and the latest recommendations.
+- Start every session with get_brief: it says what we sell, who to find, the nightly routine, what's waiting, and the latest recommendations.
+- If asked to "run the routine" (or similar), follow get_brief's workflow end to end without asking first.
 - Before writing to someone, call search or get_lead to see their full history.
 - Research new leads from get_research_queue and save it with save_research. Nothing is sent until a person approves it.
 - When you find good prospects, call add_leads (duplicates merge automatically; include whyRelevant and any signals with URLs).
