@@ -245,3 +245,14 @@ export async function instinctQueue(mode: "approve" | "auto", linkedinLimit: num
   }
   return { tasks: out, linkedinSentToday: sentToday, waitingApproval: mode === "approve" ? (await listQueue({ assignee: "instinct" })).length - rows.length : 0 };
 }
+
+/** Messages people send themselves (hands-off leads, or tasks assigned to a person). */
+export async function selfSendQueue(people: string[], opts: { channel?: string } = {}) {
+  const rows = await listQueue({ includeFuture: true, limit: 500 });
+  return rows.filter(
+    (r) =>
+      people.includes(r.action.assignee) &&
+      ["connect", "send_first", "follow_up"].includes(r.action.type) &&
+      (!opts.channel || r.action.channel === opts.channel),
+  );
+}

@@ -119,6 +119,7 @@ export async function researchLead(leadId: string) {
       ...(d.lead.stage === "new" ? { stage: "researched" as const } : {}),
     },
     "system",
+    { research: true },
   );
   await getDb().update(schema.leads).set({ researchedAt: new Date() }).where(eq(schema.leads.id, leadId));
   if (r.signals.length) await addSignals(leadId, r.signals, "system");

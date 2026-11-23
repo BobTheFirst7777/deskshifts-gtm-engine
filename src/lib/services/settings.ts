@@ -7,6 +7,8 @@ export type Settings = {
   /** approve = Instinct only sends tasks a person approved; auto = it sends everything assigned to it. */
   instinctMode: "approve" | "auto";
   linkedinDailyLimit: number;
+  /** Days to wait for a LinkedIn connection to be accepted before trying email or moving on. */
+  connectionGiveUpDays: number;
   dailyTarget: number;
   followUpDays: number;
   maxFollowUps: number;
@@ -21,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   automationPaused: false,
   instinctMode: "approve",
   linkedinDailyLimit: 25,
+  connectionGiveUpDays: 14,
   dailyTarget: 30,
   followUpDays: 3,
   maxFollowUps: 2,

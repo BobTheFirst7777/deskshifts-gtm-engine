@@ -11,7 +11,7 @@ One shared record of every lead, message and reply for Deskshift, with four ways
 
 ## The daily workflow
 
-1. **8pm, find leads.** ChatGPT (your prompt, or a nightly run) and Instinct call `get_brief`, then add leads with `add_leads`. Duplicates merge. New leads start in **New**.
+1. **8pm, find leads.** ChatGPT (your prompt, or a nightly run) and Instinct call `get_brief`, then add leads with `add_leads`: just the basics. Duplicates merge. Leads from agents always start in **New**; agents can't set the stage, hands-off or owner.
 2. **Research.** Agents pick up `get_research_queue` (Instinct uses its **Research** page) and save each lead with `save_research`. That fills these columns:
    - how they relate to us
    - why now
@@ -23,7 +23,7 @@ One shared record of every lead, message and reply for Deskshift, with four ways
    - the drafts: a LinkedIn connection note under 300 characters, the first message, and an email subject
 3. **Next step is queued.** For LinkedIn leads that's a **connection request**; once the connection is accepted, the **first message**. Email leads go straight to the message. Each step goes to **Review & send**.
 4. **You approve** on Review & send: scroll, edit inline, then approve some or all. Approved sends become a **batch**, by default "Nov 22 · LinkedIn", or named by you.
-5. **Instinct sends** only approved tasks (its **Send** page) and logs each one. It also logs accepted connections and replies. A reply stops follow-ups and creates a "Respond" task for you.
+5. **Sending.** Instinct sends only approved tasks (its **Send** page) and logs each one, plus accepted connections and replies. For leads you mark **I'll handle this one** (only people can), the same drafts show under **You send** on Review & send. The app can't send on LinkedIn for you, so you send from your own account and press **I sent it**, which records it on the timeline and in the batch. A reply stops follow-ups and creates a "Respond" task for you.
 6. **Results.** The **Batches** page shows for each batch who was sent what, who accepted, who replied (with their reply) and who's silent. Agents read the same thing with `get_batch_results`.
 7. **Recommendations.** Agents write what worked and what to change with `save_recommendations`. These show on **Insights**, and every agent reads the latest ones in `get_brief` before writing new drafts.
 
@@ -32,7 +32,14 @@ Other rules that always apply:
 - **Hands-off leads** are yours alone; Instinct won't touch them.
 - **Undo:** anything can be undone from Activity.
 - **Pause:** one lead or everything.
-- **Follow-ups:** a follow-up is queued 3 days after an unanswered *message*. Pending connection requests don't trigger them.
+- **LinkedIn flow:**
+  1. Connection request, with a note or blank.
+  2. Accepted → the first message, which follows on from the note.
+  3. No reply after 3 days → a follow-up, up to 2, then Nurture.
+  4. A request not accepted after 14 days → an email if we have their address, otherwise Nurture.
+
+  Both day limits are in Settings.
+- **Only research makes a lead "Researched":** `save_research`, or a person moving it there. Only researched leads get outreach.
 
 ## Deploy on Vercel (about 10 minutes)
 

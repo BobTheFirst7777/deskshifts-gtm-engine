@@ -26,6 +26,11 @@ beforeAll(async () => {
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400_000);
 
+async function quickResearch(leadId: string, channel: "email" | "linkedin", actor: string, importance: number) {
+  const { saveResearch: save } = await import("@/lib/services/research");
+  return save({ leadId, relation: "Fits", whyRelevant: "Signal", pitchAngle: "Angle", importance, bestChannel: channel, draftMessage: "Hello" }, actor);
+}
+
 describe("leads", () => {
   it("normalises LinkedIn URLs", () => {
     expect(normalizeLinkedin("http://linkedin.com/in/Priya-S/?utm=1")).toBe("https://www.linkedin.com/in/priya-s");
@@ -68,11 +73,12 @@ describe("leads", () => {
 
 describe("queue and follow-up loop", () => {
   it("queues first messages, respecting hands-off", async () => {
-    const auto = await addLead({ fullName: "Ben Ortiz", company: "Decagon-ish", stage: "researched", score: 90, bestChannel: "email", email: "ben@d.io" }, "claude");
+    const auto = await addLead({ fullName: "Ben Ortiz", company: "Decagon-ish", email: "ben@d.io" }, "claude");
+    await quickResearch(auto.lead.id, "email", "claude", 90);
     const manual = await addLead({ fullName: "Sara Lim", company: "Flowly", stage: "researched", score: 60, handsOff: true }, "ishan");
 
     const res = await buildDailyQueue();
-    expect(res.firstTouches).toBeGreaterThanOrEqual(2);
+    expect(res.firstTouches).toBeGreaterThanOrEqual(1); // Ben was already queued the moment research was saved
 
     const q = await listQueue();
     const ben = q.find((r) => r.lead.id === auto.lead.id)!;
@@ -132,8 +138,8 @@ describe("queue and follow-up loop", () => {
   });
 
   it("paused leads drop out of today's list", async () => {
-    const { lead } = await addLead({ fullName: "Paused Pat", stage: "researched", score: 99 }, "claude");
-    await buildDailyQueue();
+    const { lead } = await addLead({ fullName: "Paused Pat" }, "claude");
+    await quickResearch(lead.id, "email", "claude", 99);
     expect((await listQueue()).some((r) => r.lead.id === lead.id)).toBe(true);
     await updateLead(lead.id, { paused: true }, "tanzil");
     expect((await listQueue()).some((r) => r.lead.id === lead.id)).toBe(false);
@@ -213,7 +219,8 @@ describe("stats", () => {
 
 // ---------------------------------------------------------------- agent research → review → batches
 import { researchQueue, saveResearch } from "@/lib/services/research";
-import { approveActions, reviewQueue } from "@/lib/services/actions";
+import { approveActions, reviewQueue, selfSendQueue } from "@/lib/services/actions";
+import { markSent } from "@/lib/services/sends";
 import { batchDetail, listBatches, saveRecommendation } from "@/lib/services/batches";
 import { queueFirstTouch } from "@/lib/services/queue";
 import { agentBrief } from "@/lib/services/brief";
@@ -292,16 +299,63 @@ describe("agent research and the LinkedIn sequence", () => {
     expect(r.lead.customFields).toEqual({ "Support team size": "8 (Ishan checked)", "Uses Intercom": "yes" });
   });
 
-  it("queues leads that arrive already researched", async () => {
+  it("agent adds land as New: no hands-off, no owner, no Researched until research is saved", async () => {
     const res = await addLeads(
-      [{ fullName: "Omar Haddad", company: "Shiftbase", email: "omar@shiftbase.com", whyRelevant: "Hiring support", pitchAngle: "Ticket deflection", score: 80, bestChannel: "email", draftMessage: "Hi Omar…", emailSubject: "Support at Shiftbase" }],
+      [{ fullName: "Omar Haddad", company: "Shiftbase", email: "omar@shiftbase.com", whyRelevant: "Hiring support", stage: "researched", handsOff: true, owner: "ishan", score: 80 }],
       "chatgpt",
     );
     const id = (res.results[0] as { id: string }).id;
-    const d = (await getLeadDetail(id))!;
+    let d = (await getLeadDetail(id))!;
+    expect(d.lead.stage).toBe("new");
+    expect(d.lead.handsOff).toBe(false);
+    expect(d.lead.owner).toBe("ai");
+    expect(d.actions.length).toBe(0);
+    expect((await researchQueue()).some((r) => r.lead.id === id)).toBe(true);
+
+    const u = await updateLead(id, { handsOff: true, owner: "ishan", stage: "researched" }, "chatgpt");
+    expect(u.skipped).toEqual(expect.arrayContaining(["handsOff", "owner", "stage"]));
+    expect(await queueFirstTouch(id)).toBeNull();
+
+    await saveResearch({ leadId: id, relation: "r", whyRelevant: "w", pitchAngle: "Ticket deflection", importance: 80, bestChannel: "email", draftMessage: "Hi Omar…", emailSubject: "Support at Shiftbase" }, "chatgpt");
+    d = (await getLeadDetail(id))!;
     expect(d.lead.stage).toBe("researched");
     const t = d.actions.find((a) => a.status === "pending")!;
     expect(t.type).toBe("send_first");
     expect(t.subject).toBe("Support at Shiftbase");
+  });
+
+  it("only a person can make a lead hands-off; then it's theirs to send and logged like any send", async () => {
+    const [{ lead }] = await listLeads({ q: "Omar Haddad" });
+    await updateLead(lead.id, { handsOff: true }, "ishan");
+    const own = await selfSendQueue(["ishan"]);
+    const task = own.find((r) => r.lead.id === lead.id)!.action;
+    expect(task.assignee).toBe("ishan");
+    expect((await reviewQueue()).some((r) => r.lead.id === lead.id)).toBe(false);
+
+    await markSent(task.id, "ishan", { content: "Hi Omar, sent from my own Gmail" });
+    const d = (await getLeadDetail(lead.id))!;
+    expect(d.lead.stage).toBe("contacted");
+    const tp = d.touchpoints.find((t) => t.direction === "out")!;
+    expect(tp.content).toBe("Hi Omar, sent from my own Gmail");
+    expect(tp.createdBy).toBe("ishan");
+    expect(tp.batch).toMatch(/Email$/);
+    expect(d.actions.find((a) => a.id === task.id)!.status).toBe("done");
+  });
+
+  it("gives up on a LinkedIn request nobody accepts: email if known, otherwise nurture", async () => {
+    const withEmail = await addLead({ fullName: "Lee Wong", company: "Pendo-ish", linkedinUrl: "linkedin.com/in/leewong", email: "lee@p.io" }, "chatgpt");
+    const noEmail = await addLead({ fullName: "Kim Ross", company: "Gainsight-ish", linkedinUrl: "linkedin.com/in/kimross" }, "chatgpt");
+    for (const l of [withEmail.lead, noEmail.lead]) {
+      const r = await saveResearch({ leadId: l.id, relation: "r", whyRelevant: "w", pitchAngle: "p", importance: 70, bestChannel: "linkedin", connectionNote: "Hi!", draftMessage: "Thanks for connecting", emailSubject: "Quick one" }, "instinct");
+      await approveActions([r.queued!.taskId], "ishan");
+      await logTouchpoint({ leadId: l.id, actionId: r.queued!.taskId, channel: "linkedin", direction: "out", kind: "connection_request", content: "Hi!", occurredAt: daysAgo(15) }, "instinct");
+    }
+    const res = await buildDailyQueue();
+    expect(res.staleConnections).toBe(2);
+    const a = (await getLeadDetail(withEmail.lead.id))!;
+    const emailTask = a.actions.find((x) => x.status === "pending")!;
+    expect(emailTask.channel).toBe("email");
+    expect(emailTask.reason).toContain("not accepted");
+    expect((await getLeadDetail(noEmail.lead.id))!.lead.stage).toBe("nurture");
   });
 });

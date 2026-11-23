@@ -32,6 +32,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               <Field label="Follow up after (days)"><Input name="followUpDays" type="number" min={1} defaultValue={s.followUpDays} /></Field>
               <Field label="Max follow-ups" hint="then nurture"><Input name="maxFollowUps" type="number" min={0} defaultValue={s.maxFollowUps} /></Field>
               <Field label="LinkedIn sends per day"><Input name="linkedinDailyLimit" type="number" min={0} defaultValue={s.linkedinDailyLimit} /></Field>
+              <Field label="Give up on a connection after (days)" hint="then email, or nurture"><Input name="connectionGiveUpDays" type="number" min={1} defaultValue={s.connectionGiveUpDays} /></Field>
             </div>
             <Field label="Instinct mode">
               <Select
@@ -95,11 +96,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                       </p>
                       <Copy value={`${origin}/api/mcp/${key}`} />
                       <p className="pt-1">Prompt to use each night (or whenever you want a run):</p>
-                      <pre className="whitespace-pre-wrap rounded-md bg-zinc-100 px-2.5 py-1.5 font-sans text-xs text-zinc-800">{`Using Deskshift GTM: call get_brief, then
-1) find ${s.nightlyLeadTarget} new leads following "howToFindLeads" and add them with add_leads,
-2) research everything in get_research_queue and save each with save_research (drafts included),
-3) check get_batch_results for batches older than 3 days and save_recommendations with what to change.
-Tell me what you added and anything that needs my attention.`}</pre>
+                      <pre className="whitespace-pre-wrap rounded-md bg-zinc-100 px-2.5 py-1.5 font-sans text-xs text-zinc-800">{`Using Deskshift GTM, call get_brief first. Then:
+1) Find ${s.nightlyLeadTarget} new leads following "howToFindLeads". Add them with add_leads: just the basics (name, title, company, website, LinkedIn URL, email if public, where you found them). Don't research them in this step.
+2) For every lead in get_research_queue, research it and call save_research with: relation, whyRelevant, pitchAngle, importance (0-100), bestChannel, a LinkedIn connectionNote under 300 characters, the draftMessage to send after they accept (it should follow on from the note), emailSubject if email, and signals with links.
+3) For batches older than 3 days in get_batch_results, call save_recommendations with what worked and what to change.
+Don't set stages or hands-off; the team does that. Then tell me what you added and anything that needs my attention.`}</pre>
                     </div>
                   )}
                 </div>

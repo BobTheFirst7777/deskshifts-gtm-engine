@@ -33,7 +33,7 @@ export async function runResearchJob(limit = 15) {
 
 export async function runQueueJob() {
   const ai = aiEnabled();
-  return buildDailyQueue({ draft: ai ? draftFollowUp : undefined, includeUnresearched: !ai });
+  return buildDailyQueue({ draft: ai ? draftFollowUp : undefined });
 }
 
 export async function runWeeklyJob() {

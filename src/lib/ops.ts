@@ -8,9 +8,6 @@ import { addLead, leadInput, resolveLead, type AddLeadResult } from "@/lib/servi
 import { logTouchpoint, touchpointInput } from "@/lib/services/touchpoints";
 import { aiEnabled, researchLead, logAiError } from "@/lib/ai";
 import { HttpError } from "@/lib/api";
-import { getDb, schema } from "@/lib/db";
-import { eq } from "drizzle-orm";
-import { queueFirstTouch } from "@/lib/services/queue";
 
 export const leadRefInput = z.object({
   id: z.string().nullish(),
@@ -47,15 +44,7 @@ export async function addLeads(list: unknown[], actor: string) {
       const input = leadInput.parse(raw);
       const r: AddLeadResult = await addLead(input, actor);
       results.push({ ok: true, created: r.created, id: r.lead.id, name: r.lead.fullName, filled: r.filled });
-      // Added with full research already (why, angle, importance): treat as researched and queue it.
-      const l = r.lead;
-      if (l.stage === "new" && l.whyRelevant && l.pitchAngle && l.score !== null) {
-        await getDb()
-          .update(schema.leads)
-          .set({ stage: "researched", researchedAt: new Date(), researchedBy: actor })
-          .where(eq(schema.leads.id, l.id));
-        await queueFirstTouch(l.id);
-      } else if (r.created) createdIds.push(r.lead.id);
+      if (r.created) createdIds.push(r.lead.id);
     } catch (e) {
       results.push({
         ok: false,

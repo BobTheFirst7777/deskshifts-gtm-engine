@@ -177,7 +177,7 @@ export function mcpHandlerFor(actor: string) {
         {
           title: "Add leads",
           description:
-            "Add prospects you found (from Apollo, LinkedIn, events, the web). Duplicates are merged, never doubled. Always include whyRelevant and any signals with source URLs.",
+            "Add prospects you found (from Apollo, LinkedIn, events, the web) with the basics: name, title, company, website, LinkedIn URL, email if public, and where you found them (sourceDetail). They arrive as New; research them next with save_research. Duplicates are merged, never doubled. Stage, hands-off and owner are set by the team only.",
           inputSchema: z.object({ leads: z.array(leadInput).min(1).max(100) }),
         },
         wrap(async ({ leads }: { leads: unknown[] }) => addLeads(leads, actor)),
@@ -187,7 +187,8 @@ export function mcpHandlerFor(actor: string) {
         "update_lead",
         {
           title: "Update a lead",
-          description: "Change fields on a lead. Fields the team set by hand are protected and come back as skipped.",
+          description:
+            "Change fields on a lead. Fields the team set by hand are protected and come back as skipped. Hands-off and owner can only be set by the team; to mark a lead researched, use save_research.",
           inputSchema: z.object({
             id: z.string(),
             fields: z.object({

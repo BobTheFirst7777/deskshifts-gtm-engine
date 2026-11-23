@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { CHANNELS, PRIORITIES, SIGNAL_TYPES, TIERS } from "@/lib/constants";
@@ -13,7 +13,14 @@ export async function researchQueue(limit = 25) {
     .select({ lead: schema.leads, company: schema.companies })
     .from(schema.leads)
     .leftJoin(schema.companies, eq(schema.leads.companyId, schema.companies.id))
-    .where(and(isNull(schema.leads.researchedAt), isNull(schema.leads.deletedAt), eq(schema.leads.stage, "new")))
+    .where(
+      and(
+        isNull(schema.leads.researchedAt),
+        isNull(schema.leads.deletedAt),
+        eq(schema.leads.paused, false),
+        inArray(schema.leads.stage, ["new", "researched"]),
+      ),
+    )
     .orderBy(asc(schema.leads.createdAt))
     .limit(limit);
 }
@@ -74,9 +81,9 @@ export async function saveResearch(raw: ResearchInput, actor: string) {
   }
   if (r.customFields && Object.keys(r.customFields).length) patch.customFields = r.customFields;
   if (r.linkedinConnected) patch.linkedinStatus = "connected";
-  if (lead.stage === "new") patch.stage = "researched";
+  if (lead.stage === "new" || lead.stage === "researched") patch.stage = "researched";
 
-  const res = await updateLead(lead.id, patch, actor);
+  const res = await updateLead(lead.id, patch, actor, { research: true });
   await getDb()
     .update(schema.leads)
     .set({ researchedAt: new Date(), researchedBy: actor })

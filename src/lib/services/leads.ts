@@ -336,7 +336,11 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
   );
   const event = await findOrCreateEvent({ name: input.event, url: input.eventUrl }, actor);
 
-  const source = input.source || (isHuman(actor) ? "manual" : actor);
+  const human = isHuman(actor);
+  const source = input.source || (human ? "manual" : actor);
+  // Agents add leads as New. Researching them is the next step (save_research),
+  // and only people can take a lead on themselves (hands-off) or assign an owner.
+  const stage = human ? (input.stage ?? "new") : "new";
   const values = {
     fullName: input.fullName,
     title: input.title ?? null,
@@ -349,7 +353,7 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
     source,
     sourceDetail: input.sourceDetail ?? (event ? `Event: ${event.name}` : null),
     tier: input.tier ?? (event ? "event" : "standard"),
-    stage: input.stage ?? "new",
+    stage,
     score: input.score ?? null,
     priority: input.priority ?? null,
     whyRelevant: input.whyRelevant ?? null,
@@ -360,11 +364,13 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
     draftMessage: input.draftMessage ?? null,
     emailSubject: input.emailSubject ?? null,
     bestChannel: input.bestChannel ?? null,
-    owner: input.owner ?? (input.handsOff && isHuman(actor) ? actor : "ai"),
+    owner: human ? (input.owner ?? (input.handsOff ? actor : "ai")) : "ai",
     segment: input.segment ?? null,
     tags: input.tags ?? [],
     notes: input.notes ?? null,
-    handsOff: input.handsOff ?? false,
+    handsOff: human ? (input.handsOff ?? false) : false,
+    researchedAt: human && stage === "researched" ? new Date() : null,
+    researchedBy: human && stage === "researched" ? actor : null,
   };
 
   const dup = await findDuplicate({
@@ -396,6 +402,12 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
     }
     delete fill.stage;
     delete fill.source;
+    delete fill.researchedAt;
+    delete fill.researchedBy;
+    if (!human) {
+      delete fill.handsOff;
+      delete fill.owner;
+    }
     let lead = dup;
     if (Object.keys(fill).length) {
       const [u] = await db
@@ -424,7 +436,7 @@ export async function addLead(raw: LeadInput, actor: string): Promise<AddLeadRes
           ([k, v]) =>
             v !== null &&
             !(Array.isArray(v) && !v.length) &&
-            !["stage", "source", "tier", "owner", "handsOff", "customFields"].includes(k),
+            !["stage", "source", "tier", "owner", "handsOff", "customFields", "researchedAt", "researchedBy"].includes(k),
         )
         .map(([k]) => k)
         .concat(Object.keys(values.customFields).map((ck) => `custom:${ck}`))
@@ -500,7 +512,7 @@ export async function updateLead(
   id: string,
   rawPatch: LeadPatch,
   actor: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; research?: boolean } = {},
 ): Promise<UpdateResult> {
   const db = getDb();
   const current = await getLead(id);
@@ -512,6 +524,16 @@ export async function updateLead(
   const skipped: string[] = [];
   for (const k of LEAD_EDITABLE_FIELDS) {
     if (!(k in patch) || patch[k] === undefined) continue;
+    // Only people decide who handles a lead.
+    if (!human && (k === "handsOff" || k === "owner")) {
+      skipped.push(k);
+      continue;
+    }
+    // Agents mark a lead researched only by saving research.
+    if (!human && k === "stage" && patch[k] === "researched" && !opts.research) {
+      skipped.push(k);
+      continue;
+    }
     if (!human && current.manualFields.includes(k)) {
       skipped.push(k);
       continue;
@@ -572,6 +594,12 @@ export async function updateLead(
   }
   if (d.changed.includes("stage") && (lead.stage === "won" || lead.stage === "lost")) {
     await cancelPendingActions(lead.id, actor, `Lead marked ${lead.stage}`);
+  }
+  // A person moving a lead to Researched counts as research done: queue its first step.
+  if (d.changed.includes("stage") && lead.stage === "researched" && !lead.researchedAt && isHuman(actor)) {
+    await db.update(schema.leads).set({ researchedAt: new Date(), researchedBy: actor }).where(eq(schema.leads.id, id));
+    const { queueFirstTouch } = await import("./queue");
+    await queueFirstTouch(id);
   }
   return { lead, changed: d.changed, skipped };
 }

@@ -25,6 +25,9 @@ import { executeAgentOps } from "@/lib/services/agent-ops";
 import { JOBS, type JobName } from "@/lib/jobs";
 import { parseCsv, rowsToLeads } from "@/lib/csv";
 import { saveRecommendation } from "@/lib/services/batches";
+import { isSendTask, markSent } from "@/lib/services/sends";
+import { getDb, schema } from "@/lib/db";
+import { eq } from "drizzle-orm";
 import { CHANNELS, REPLY_LABELS, STAGES, TOUCH_KINDS } from "@/lib/constants";
 
 const s = (fd: FormData, k: string) => {
@@ -269,8 +272,25 @@ export async function createTaskForm(fd: FormData) {
 
 export async function taskStatus(fd: FormData) {
   const user = await requireUser();
-  await setActionStatus(s(fd, "id"), s(fd, "status") as "done", user, sOrNull(fd, "note") ?? undefined);
+  const id = s(fd, "id");
+  const status = s(fd, "status") as "done";
+  const [task] = await getDb().select().from(schema.actions).where(eq(schema.actions.id, id));
+  // Marking a send task done means you sent it: log it on the timeline and in a batch.
+  if (task && status === "done" && isSendTask(task.type)) await markSent(id, user);
+  else await setActionStatus(id, status, user, sOrNull(fd, "note") ?? undefined);
   refresh();
+}
+
+export async function sentByMe(fd: FormData) {
+  const user = await requireUser();
+  const back = s(fd, "back") || "/review";
+  try {
+    await markSent(s(fd, "id"), user, { content: sOrNull(fd, "content"), subject: sOrNull(fd, "subject"), batch: sOrNull(fd, "batch") });
+  } catch (e) {
+    go(back, undefined, (e as Error).message);
+  }
+  refresh();
+  go(back, `Logged as sent by you${s(fd, "name") ? `: ${s(fd, "name")}` : ""}.`);
 }
 
 export async function saveTask(fd: FormData) {
@@ -318,7 +338,7 @@ export async function saveSettings(fd: FormData) {
   if (fd.has("icp")) patch.icp = s(fd, "icp");
   if (fd.has("pitch")) patch.pitch = s(fd, "pitch");
   if (fd.has("sourcingBrief")) patch.sourcingBrief = s(fd, "sourcingBrief");
-  for (const k of ["dailyTarget", "followUpDays", "maxFollowUps", "linkedinDailyLimit", "nightlyLeadTarget"] as const) {
+  for (const k of ["dailyTarget", "followUpDays", "maxFollowUps", "linkedinDailyLimit", "nightlyLeadTarget", "connectionGiveUpDays"] as const) {
     if (fd.has(k) && s(fd, k)) patch[k] = Math.max(0, Number(s(fd, k)));
   }
   if (fd.has("instinctMode")) patch.instinctMode = s(fd, "instinctMode") === "auto" ? "auto" : "approve";

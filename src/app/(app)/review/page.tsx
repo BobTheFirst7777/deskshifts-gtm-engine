@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { reviewQueue, defaultBatchName, listQueue } from "@/lib/services/actions";
+import { reviewQueue, defaultBatchName, listQueue, selfSendQueue } from "@/lib/services/actions";
+import { requireUser } from "@/lib/auth";
+import { humanNames } from "@/lib/actors";
 import { getSettings } from "@/lib/services/settings";
 import { ACTION_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { Badge, Button, Empty, Flash, Input, PageHeader, ScorePill, TierBadge, cx } from "@/components/ui";
-import { runJob, skipReviewItem, submitReview } from "../actions";
+import { runJob, sentByMe, skipReviewItem, submitReview } from "../actions";
 
 export const metadata = { title: "Review & send" };
 
@@ -16,13 +18,20 @@ const TABS = [
 export default async function Review({ searchParams }: { searchParams: Promise<{ channel?: string; msg?: string; err?: string }> }) {
   const sp = await searchParams;
   const channel = sp.channel || undefined;
-  const [items, all, approvedWaiting, settings] = await Promise.all([
+  const user = await requireUser();
+  const people = humanNames();
+  const [items, all, approvedWaiting, settings, own, ownAll] = await Promise.all([
     reviewQueue({ channel }),
     reviewQueue(),
     listQueue({ assignee: "instinct", approvedOnly: true }),
     getSettings(),
+    selfSendQueue(people, { channel }),
+    selfSendQueue(people),
   ]);
-  const count = (c: string) => (c ? all.filter((r) => r.action.channel === c).length : all.length);
+  // Yours first, then teammates'.
+  own.sort((a, b) => Number(b.action.assignee === user) - Number(a.action.assignee === user));
+  const everything = [...all, ...ownAll];
+  const count = (c: string) => (c ? everything.filter((r) => r.action.channel === c).length : everything.length);
   const back = `/review${channel ? `?channel=${channel}` : ""}`;
 
   return (
@@ -30,7 +39,7 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="Review & send"
-        subtitle={`Nothing goes out until you approve it here. Approved messages go to Instinct, which sends them and logs each one.${approvedWaiting.length ? ` ${approvedWaiting.length} approved and waiting for Instinct.` : ""}`}
+        subtitle={`Everything waiting to go out. Instinct sends only what you approve; for leads you handle yourself, send from your own LinkedIn or inbox and press “I sent it”.${approvedWaiting.length ? ` ${approvedWaiting.length} approved and waiting for Instinct.` : ""}`}
         actions={
           <form action={runJob}>
             <input type="hidden" name="job" value="queue" />
@@ -52,6 +61,7 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
         ))}
       </div>
 
+      <h2 className="mb-2 mt-2 text-sm font-semibold text-zinc-900">Instinct sends, after you approve ({items.length})</h2>
       {items.length === 0 ? (
         <div className="rounded-xl border border-zinc-200">
           <Empty>
@@ -126,6 +136,66 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
             })}
           </ul>
         </form>
+      )}
+
+      <h2 className="mb-2 mt-10 text-sm font-semibold text-zinc-900">You send ({own.length})</h2>
+      <p className="mb-3 text-xs text-zinc-500">
+        Hands-off leads and tasks assigned to a person. The app can&apos;t send on LinkedIn for you: copy the note or message, send it from
+        your own account, then press “I sent it” so it&apos;s on the timeline and in the batch.
+      </p>
+      {own.length === 0 ? (
+        <div className="rounded-xl border border-zinc-200">
+          <Empty>Nothing for you to send. Mark a lead “I&apos;ll handle this one” to send it yourself.</Empty>
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {own.map(({ action: a, lead: l, company: c }) => {
+            const isConnect = a.type === "connect";
+            return (
+              <li key={a.id} className="rounded-xl border border-zinc-200 bg-white p-4">
+                <form action={sentByMe}>
+                  <input type="hidden" name="id" value={a.id} />
+                  <input type="hidden" name="name" value={l.fullName} />
+                  <input type="hidden" name="back" value={back} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ScorePill score={l.score} />
+                    <Link href={`/leads/${l.id}`} className="font-medium hover:underline">{l.fullName}</Link>
+                    <span className="text-sm text-zinc-500">{[l.title, c?.name].filter(Boolean).join(" · ")}</span>
+                    <Badge tone={isConnect ? "blue" : a.type === "follow_up" ? "amber" : "indigo"}>{ACTION_LABEL[a.type]}</Badge>
+                    <Badge>{CHANNEL_LABEL[a.channel ?? ""] ?? "Any"}</Badge>
+                    {a.assignee !== user && <Badge tone="violet">for {a.assignee}</Badge>}
+                    <span className="ml-auto flex gap-3 text-xs">
+                      {l.linkedinUrl && <a href={l.linkedinUrl} target="_blank" className="text-accent-600 hover:underline">Open LinkedIn ↗</a>}
+                      {l.email && a.channel === "email" && <a href={`mailto:${l.email}?subject=${encodeURIComponent(a.subject ?? "")}&body=${encodeURIComponent(a.draft ?? "")}`} className="text-accent-600 hover:underline">Open in mail ↗</a>}
+                    </span>
+                  </div>
+                  {(l.pitchAngle || l.whyRelevant) && (
+                    <p className="mt-1 text-xs text-zinc-600">
+                      {l.pitchAngle && <><b className="font-medium text-zinc-800">Pitch:</b> {l.pitchAngle}. </>}
+                      {l.whyRelevant && <><b className="font-medium text-zinc-800">Why now:</b> {l.whyRelevant}</>}
+                    </p>
+                  )}
+                  {a.channel === "email" && <Input name="subject" defaultValue={a.subject ?? ""} placeholder="Subject" className="mt-2" />}
+                  <textarea
+                    name="content"
+                    defaultValue={a.draft ?? ""}
+                    rows={isConnect ? 3 : 5}
+                    placeholder={isConnect ? "Connection note (optional, under 300 characters)" : "The message you sent"}
+                    className="mt-2 w-full rounded-md px-2.5 py-1.5 text-sm leading-relaxed ring-1 ring-inset ring-zinc-300 outline-none focus:ring-2 focus:ring-accent-500"
+                  />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Input name="batch" placeholder={`Batch (default "${defaultBatchName(a.channel)}")`} className="h-8 max-w-64" />
+                    <Button tone="primary" size="sm">{isConnect ? "I sent the request" : "I sent it"}</Button>
+                    <button formAction={skipReviewItem} name="skip" value={a.id} className="ml-auto text-xs font-medium text-zinc-500 hover:text-red-600">
+                      Skip this one
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11px] text-zinc-400">Edit the text to match exactly what you sent before pressing the button.</p>
+                </form>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

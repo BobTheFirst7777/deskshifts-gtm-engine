@@ -38,6 +38,8 @@ export async function queueFirstTouch(leadId: string, opts: { force?: boolean; n
   const lead = await getLead(leadId);
   if (!lead || lead.deletedAt || lead.paused) return null;
   if (!["new", "researched"].includes(lead.stage)) return null;
+  // Only researched leads get outreach: research writes the drafts.
+  if (!lead.researchedAt && !opts.force) return null;
   if (await hasPendingOutbound(lead.id)) return null;
 
   const settings = await getSettings();
@@ -109,12 +111,12 @@ export async function createOutreachTask(lead: Lead, type: "connect" | "send_fir
  * Paused, hands-off (assigned to a person instead), won and lost leads are respected.
  */
 export async function buildDailyQueue(
-  opts: { draft?: Drafter; now?: Date; includeUnresearched?: boolean } = {},
+  opts: { draft?: Drafter; now?: Date } = {},
 ) {
   const db = getDb();
   const settings = await getSettings();
   const now = opts.now ?? new Date();
-  if (settings.automationPaused) return { paused: true, followUps: 0, firstTouches: 0, nurtured: 0 };
+  if (settings.automationPaused) return { paused: true, followUps: 0, firstTouches: 0, nurtured: 0, staleConnections: 0 };
 
   const cutoff = new Date(now.getTime() - settings.followUpDays * 86400_000);
 
@@ -124,6 +126,53 @@ export async function buildDailyQueue(
     .where(eq(schema.actions.status, "pending"));
   const busy = new Set(pending.map((p) => p.leadId));
 
+  let nurtured = 0;
+  // ---- 0. LinkedIn requests nobody accepted: try email, or move on
+  let staleConnections = 0;
+  const giveUp = new Date(now.getTime() - settings.connectionGiveUpDays * 86400_000);
+  const pendingConn = await db
+    .select()
+    .from(schema.leads)
+    .where(and(eq(schema.leads.linkedinStatus, "pending"), eq(schema.leads.paused, false), isNull(schema.leads.deletedAt)));
+  for (const lead of pendingConn) {
+    if (busy.has(lead.id) || !["new", "researched", "contacted"].includes(lead.stage)) continue;
+    const [lastReq] = await db
+      .select()
+      .from(schema.touchpoints)
+      .where(and(eq(schema.touchpoints.leadId, lead.id), eq(schema.touchpoints.kind, "connection_request"), isNull(schema.touchpoints.deletedAt)))
+      .orderBy(desc(schema.touchpoints.occurredAt))
+      .limit(1);
+    if (!lastReq || lastReq.occurredAt > giveUp) continue;
+    const [anyMessage] = await db
+      .select({ id: schema.touchpoints.id })
+      .from(schema.touchpoints)
+      .where(and(eq(schema.touchpoints.leadId, lead.id), inArray(schema.touchpoints.kind, [...MESSAGE_KINDS]), isNull(schema.touchpoints.deletedAt)))
+      .limit(1);
+    if (anyMessage) continue;
+    const days = Math.round((now.getTime() - lastReq.occurredAt.getTime()) / 86400_000);
+    if (lead.email) {
+      const a = await createOutreachTask(lead, "send_first", "email", now);
+      await db
+        .update(schema.actions)
+        .set({ reason: `LinkedIn request not accepted after ${days} days; trying email` })
+        .where(eq(schema.actions.id, a.id));
+      busy.add(lead.id);
+    } else {
+      await db.update(schema.leads).set({ stage: "nurture", updatedAt: now }).where(eq(schema.leads.id, lead.id));
+      await record({
+        actor: "system",
+        entityType: "lead",
+        entityId: lead.id,
+        action: "update",
+        summary: `${lead.fullName}: LinkedIn request not accepted after ${days} days and no email; moved to nurture`,
+        before: { stage: lead.stage },
+        after: { stage: "nurture" },
+      });
+      nurtured++;
+    }
+    staleConnections++;
+  }
+
   // ---- 1. follow-ups
   const contacted = await db
     .select()
@@ -131,7 +180,6 @@ export async function buildDailyQueue(
     .where(and(eq(schema.leads.stage, "contacted"), eq(schema.leads.paused, false), isNull(schema.leads.deletedAt)));
 
   let followUps = 0;
-  let nurtured = 0;
   for (const lead of contacted) {
     if (busy.has(lead.id)) continue;
     const tps = await db
@@ -197,9 +245,7 @@ export async function buildDailyQueue(
         inArray(schema.leads.stage, ["researched", "new"]),
         eq(schema.leads.paused, false),
         isNull(schema.leads.deletedAt),
-        opts.includeUnresearched
-          ? sql`true`
-          : sql`(${schema.leads.stage} = 'researched' or ${schema.leads.score} is not null or ${schema.leads.owner} <> 'ai')`,
+        sql`${schema.leads.researchedAt} is not null`,
       ),
     )
     .orderBy(
@@ -219,5 +265,5 @@ export async function buildDailyQueue(
     }
   }
 
-  return { paused: false, followUps, firstTouches, nurtured };
+  return { paused: false, followUps, firstTouches, nurtured, staleConnections };
 }
